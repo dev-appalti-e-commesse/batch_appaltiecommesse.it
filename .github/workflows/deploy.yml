@@ -50,56 +50,8 @@ jobs:
         docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:latest
         docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}
 
-    - name: Update Batch Job Definitions (Optional)
-      run: |
-        # Update job definitions to use new image
-        aws batch register-job-definition \
-          --job-definition-name ${{ env.PROJECT_NAME }}-metric-computation \
-          --type container \
-          --platform-capabilities FARGATE \
-          --container-properties '{
-            "image": "${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}",
-            "jobRoleArn": "arn:aws:iam::${{ steps.ecr-uri.outputs.account_id }}:role/${{ env.PROJECT_NAME }}-batch-job-role",
-            "executionRoleArn": "arn:aws:iam::${{ steps.ecr-uri.outputs.account_id }}:role/${{ env.PROJECT_NAME }}-ecs-task-execution-role",
-            "resourceRequirements": [
-              {"type": "VCPU", "value": "0.25"},
-              {"type": "MEMORY", "value": "512"}
-            ],
-            "environment": [{"name": "JOB_TYPE", "value": "extractMetricComputation"}],
-            "logConfiguration": {
-              "logDriver": "awslogs",
-              "options": {
-                "awslogs-group": "/aws/batch/${{ env.PROJECT_NAME }}",
-                "awslogs-region": "${{ env.AWS_REGION }}",
-                "awslogs-stream-prefix": "metric-computation"
-              }
-            }
-          }'
-
-    - name: Test deployment
-      run: |
-        echo "🧪 Testing batch job submission..."
-        cd nodejs-integration
-        npm install --production
-        
-        # Test job submission
-        node -e "
-        const BatchClient = require('./batch-client');
-        const client = new BatchClient();
-        
-        client.submitMetricComputationJob({
-          deployment: 'github-actions',
-          commit: '${{ github.sha }}',
-          timestamp: new Date().toISOString()
-        })
-        .then(result => {
-          console.log('✅ Test job submitted:', result.jobId);
-        })
-        .catch(error => {
-          console.error('❌ Test failed:', error);
-          process.exit(1);
-        });
-        "
+    # Job definitions are already configured in AWS Batch
+    # They will automatically use the latest image from ECR
 
     - name: Deployment summary
       run: |
