@@ -1,0 +1,20 @@
+{
+  "name": "batch-appalti-client",
+  "version": "1.0.0",
+  "description": "AWS Batch client for Node.js integration",
+  "main": "batch-client.js",
+  "dependencies": {
+    "aws-sdk": "^2.1490.0",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "aws",
+    "batch",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT"
+}

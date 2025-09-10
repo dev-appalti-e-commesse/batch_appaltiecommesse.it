@@ -1,0 +1,18 @@
+# Python dependencies for AWS Batch jobs
+# Minimal dependencies for production-ready batch processing
+
+# Core dependencies
+boto3==1.34.0
+botocore==1.34.0
+
+# JSON handling
+ujson==5.9.0
+
+# Date and time
+python-dateutil==2.8.2
+
+# Environment variable management
+python-dotenv==1.0.0
+
+# Logging enhancements (optional)
+colorlog==6.8.0

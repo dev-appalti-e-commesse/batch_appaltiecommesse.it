@@ -1,0 +1,8 @@
+# AWS Region
+aws_region = "eu-central-1"
+
+# Environment
+environment = "production"
+
+# Project Name
+project_name = "appalti-batch"

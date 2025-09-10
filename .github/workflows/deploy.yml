@@ -1,0 +1,108 @@
+name: Build and Deploy AWS Batch
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  AWS_REGION: eu-central-1
+  PROJECT_NAME: appalti-batch
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Get ECR repository URI
+      id: ecr-uri
+      run: |
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+        ECR_URI="${ACCOUNT_ID}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ env.PROJECT_NAME }}-jobs"
+        echo "ecr_uri=${ECR_URI}" >> $GITHUB_OUTPUT
+
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.PROJECT_NAME }}-jobs -f docker/Dockerfile .
+
+    - name: Tag Docker image
+      run: |
+        docker tag ${{ env.PROJECT_NAME }}-jobs:latest ${{ steps.ecr-uri.outputs.ecr_uri }}:latest
+        docker tag ${{ env.PROJECT_NAME }}-jobs:latest ${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}
+
+    - name: Push Docker image to ECR
+      run: |
+        docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:latest
+        docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}
+
+    - name: Update Batch Job Definitions (Optional)
+      run: |
+        # Update job definitions to use new image
+        aws batch register-job-definition \
+          --job-definition-name ${{ env.PROJECT_NAME }}-metric-computation \
+          --type container \
+          --platform-capabilities FARGATE \
+          --container-properties '{
+            "image": "${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}",
+            "jobRoleArn": "arn:aws:iam::${{ steps.ecr-uri.outputs.account_id }}:role/${{ env.PROJECT_NAME }}-batch-job-role",
+            "executionRoleArn": "arn:aws:iam::${{ steps.ecr-uri.outputs.account_id }}:role/${{ env.PROJECT_NAME }}-ecs-task-execution-role",
+            "resourceRequirements": [
+              {"type": "VCPU", "value": "0.25"},
+              {"type": "MEMORY", "value": "512"}
+            ],
+            "environment": [{"name": "JOB_TYPE", "value": "extractMetricComputation"}],
+            "logConfiguration": {
+              "logDriver": "awslogs",
+              "options": {
+                "awslogs-group": "/aws/batch/${{ env.PROJECT_NAME }}",
+                "awslogs-region": "${{ env.AWS_REGION }}",
+                "awslogs-stream-prefix": "metric-computation"
+              }
+            }
+          }'
+
+    - name: Test deployment
+      run: |
+        echo "🧪 Testing batch job submission..."
+        cd nodejs-integration
+        npm install --production
+        
+        # Test job submission
+        node -e "
+        const BatchClient = require('./batch-client');
+        const client = new BatchClient();
+        
+        client.submitMetricComputationJob({
+          deployment: 'github-actions',
+          commit: '${{ github.sha }}',
+          timestamp: new Date().toISOString()
+        })
+        .then(result => {
+          console.log('✅ Test job submitted:', result.jobId);
+        })
+        .catch(error => {
+          console.error('❌ Test failed:', error);
+          process.exit(1);
+        });
+        "
+
+    - name: Deployment summary
+      run: |
+        echo "🎉 Deployment completed!"
+        echo "📦 Image: ${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}"
+        echo "🔍 Check logs: aws logs tail /aws/batch/${{ env.PROJECT_NAME }} --follow"
