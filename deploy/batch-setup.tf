@@ -178,7 +178,12 @@ resource "aws_batch_compute_environment" "main" {
     type               = "FARGATE"
     max_vcpus          = 256
     security_group_ids = [data.aws_security_group.default.id]
-    subnets           = data.aws_subnets.default.ids
+    # Using specific subnets instead of all default VPC subnets to fix network issues
+    subnets           = [
+      "subnet-058c2403ce4f3053c",  # eu-central-1a (public subnet with IGW)
+      "subnet-09f310b71fc64e81e",  # eu-central-1b (public subnet with IGW)
+      "subnet-01d7d747b6e40c3c0"   # eu-central-1c (public subnet with IGW)
+    ]
   }
 
   tags = local.common_tags
@@ -212,6 +217,10 @@ resource "aws_batch_job_definition" "metric_computation" {
     
     fargatePlatformConfiguration = {
       platformVersion = "LATEST"
+    }
+    
+    networkConfiguration = {
+      assignPublicIp = "ENABLED"
     }
     
     resourceRequirements = [
@@ -260,6 +269,10 @@ resource "aws_batch_job_definition" "metadata_extraction" {
     
     fargatePlatformConfiguration = {
       platformVersion = "LATEST"
+    }
+    
+    networkConfiguration = {
+      assignPublicIp = "ENABLED"
     }
     
     resourceRequirements = [
