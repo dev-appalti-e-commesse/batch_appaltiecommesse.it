@@ -68,8 +68,18 @@ jobs:
         environment = "production"
         EOF
         
-        # Deploy infrastructure
+        # Initialize Terraform
         terraform init
+        
+        # Import existing resources if they exist (ignore errors if not found)
+        echo "Importing existing resources..."
+        terraform import aws_ecr_repository.batch_jobs appalti-batch-jobs || true
+        terraform import aws_iam_role.batch_service_role appalti-batch-batch-service-role || true
+        terraform import aws_iam_role.ecs_task_execution_role appalti-batch-ecs-task-execution-role || true
+        terraform import aws_iam_role.batch_job_role appalti-batch-batch-job-role || true
+        terraform import aws_cloudwatch_log_group.batch_logs /aws/batch/appalti-batch || true
+        
+        # Deploy infrastructure
         terraform plan
         terraform apply -auto-approve
 
