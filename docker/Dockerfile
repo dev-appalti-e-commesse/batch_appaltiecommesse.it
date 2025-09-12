@@ -15,8 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Debug: Force rebuild and verify files are copied
+RUN echo "BUILD_TIME=$(date)" > /app/build_info.txt
+
 COPY jobs/ ./jobs/
 COPY docker/run.sh .
+
+# Debug: Verify checkpoint logs are in the copied files
+RUN grep -n "CHECKPOINT" /app/jobs/extract_primus_specialized.py || echo "WARNING: No checkpoints found in extract_primus_specialized.py"
 
 RUN chmod +x run.sh && \
     chmod +x jobs/*.py
