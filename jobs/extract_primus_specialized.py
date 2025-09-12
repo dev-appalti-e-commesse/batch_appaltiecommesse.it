@@ -172,8 +172,13 @@ class PrimusPDFExtractor:
             # DEBUG: Show first 1000 characters of extracted text
             logger.info(f"DEBUG - First 1000 chars of extracted text: {repr(full_document_text[:1000])}")
             
+            # Force flush to ensure logs are written
+            import sys
+            sys.stderr.flush()
+            
             # CHECKPOINT 1
             logger.info("CHECKPOINT 1: About to process debug lines")
+            sys.stderr.flush()
             
             # DEBUG: Show first 20 lines after cleaning
             lines_sample = full_document_text.split('\n')[:20]
