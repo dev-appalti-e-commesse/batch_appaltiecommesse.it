@@ -1,8 +1,28 @@
-# AWS Region
+# Example Terraform variables
+# Copy this file to terraform.tfvars and update with your values
+
+# AWS Configuration
 aws_region = "eu-central-1"
+account_id = "123456789012"  # Replace with your AWS account ID
 
-# Environment
-environment = "production"
-
-# Project Name
+# Project Configuration
 project_name = "appalti-batch"
+environment = "prod"
+
+# ECR Configuration
+ecr_repository_name = "appalti-batch-jobs"
+
+# Batch Configuration
+compute_environment_name = "appalti-batch-compute-env"
+job_queue_name = "appalti-batch-job-queue"
+job_definition_metric_computation = "appalti-batch-metric-computation"
+job_definition_metadata_extraction = "appalti-batch-metadata-extraction"
+
+# Container Configuration
+container_vcpus = 1
+container_memory = 2048
+max_compute_environments = 10
+
+# VPC Configuration (optional - uses default VPC if not specified)
+# vpc_id = "vpc-xxxxxxxx"
+# subnet_ids = ["subnet-xxxxxxxx", "subnet-yyyyyyyy"]

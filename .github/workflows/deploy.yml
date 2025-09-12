@@ -50,6 +50,21 @@ jobs:
         docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:latest
         docker push ${{ steps.ecr-uri.outputs.ecr_uri }}:${{ github.sha }}
 
+    - name: Update AWS Secrets Manager
+      run: |
+        # Update the secrets in AWS Secrets Manager with values from GitHub secrets
+        aws secretsmanager update-secret \
+          --secret-id "appalti-batch-secrets" \
+          --secret-string '{
+            "MONGO_URI": "${{ secrets.MONGO_URI }}",
+            "SMTP_HOST": "smtp.gmail.com",
+            "SMTP_PORT": "587", 
+            "SMTP_USER": "${{ secrets.SMTP_USER }}",
+            "SMTP_PASSWORD": "${{ secrets.SMTP_PASSWORD }}",
+            "EMAIL_FROM": "${{ secrets.EMAIL_FROM }}",
+            "GOOGLE_API_KEY": "${{ secrets.GOOGLE_API_KEY }}"
+          }'
+
     # Job definitions are already configured in AWS Batch
     # They will automatically use the latest image from ECR
 
