@@ -292,6 +292,10 @@ class PrimusPDFExtractor:
             if not in_data_section:
                 continue
                 
+            # Debug: show first few lines we're analyzing
+            if line_num <= 20:
+                logger.info(f"🔍 PRIMUS METHOD: Analyzing line {line_num}: {repr(line_stripped)}")
+                
             # Look for MAIN work item starts: number + description or number + reference code
             # Pattern: "1 Nolo di autocarro...", "2 Nolo di piattaforma...", "5 Scavo a sezione..."
             # BUT NOT 3-digit reference code endings like "005", "010", "015"
@@ -318,18 +322,21 @@ class PrimusPDFExtractor:
                 special_case_match = re.match(r'^(13|37|74)\s+(cemento|metalli|legno)', line_stripped)
                 
                 if main_item_match or fraction_match or special_case_match:
+                    logger.info(f"🔍 PRIMUS METHOD: FOUND MATCH! Line: {repr(line_stripped[:100])}")
                     if main_item_match:
                         item_number = int(main_item_match.group(1))
                         descriptive_word = main_item_match.group(2)
                         valid_item = (item_number <= 100 and 
                                     not descriptive_word.lower().startswith(('circuit', 'linea', 'sotto')))
+                        logger.info(f"🔍 PRIMUS METHOD: Main item match - number: {item_number}, word: {descriptive_word}")
                     elif fraction_match:
                         item_number = int(fraction_match.group(1))
                         valid_item = True  # Fraction patterns are always valid work items
-                        logger.debug(f"Found fraction pattern work item: {item_number}")
+                        logger.info(f"🔍 PRIMUS METHOD: Fraction match - number: {item_number}")
                     else:  # special_case_match
                         item_number = int(special_case_match.group(1))
                         valid_item = True
+                        logger.info(f"🔍 PRIMUS METHOD: Special case match - number: {item_number}")
                     
                     if valid_item:
                         # If we have a previous chunk, save it
