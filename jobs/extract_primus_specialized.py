@@ -124,6 +124,19 @@ class PrimusPDFExtractor:
                 
         return False
     
+    def normalize_text_line(self, line: str) -> str:
+        """Normalize text line for consistent cross-platform parsing"""
+        if not line:
+            return line
+        
+        # Normalize spacing around common separators
+        line = re.sub(r'\s*/\s*', '/', line)  # "1 / 1" -> "1/1"
+        line = re.sub(r'\s*-\s*', '-', line)  # "A - B" -> "A-B"
+        line = re.sub(r'\s+', ' ', line)      # Multiple spaces -> single space
+        line = line.strip()
+        
+        return line
+    
     def extract_work_item_chunks(self, pdf_path: str) -> List[str]:
         """Extract work item chunks using proven universal extractor logic"""
         logger.info(f"Reading, cleaning, and parsing PDF: {pdf_path}")
@@ -136,7 +149,13 @@ class PrimusPDFExtractor:
                     try:
                         page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
                         if page_text:
-                            cleaned_lines = [line for line in page_text.split('\n') if not self.is_junk_line(line)]
+                            # Clean and normalize lines for consistent cross-platform parsing
+                            cleaned_lines = []
+                            for line in page_text.split('\n'):
+                                if not self.is_junk_line(line):
+                                    normalized_line = self.normalize_text_line(line)
+                                    if normalized_line:  # Only add non-empty normalized lines
+                                        cleaned_lines.append(normalized_line)
                             full_document_text += "\n".join(cleaned_lines) + "\n"
                             logger.debug(f"Extracted {len(cleaned_lines)} lines from page {i+1}")
                         else:
@@ -292,7 +311,9 @@ class PrimusPDFExtractor:
                 # 2. Fraction format: "1/17", "2/18", "3/19" (extract just the first number)
                 # 3. Special cases: items that start with lowercase
                 
+                # Robust patterns - text is now normalized so "1 / 1" becomes "1/1"
                 main_item_match = re.match(r'^([1-9]\d?)\s+([A-Z][a-zA-Z]{3,})', line_stripped)
+                # Match fraction format after normalization: "1/1", "2/2", etc.
                 fraction_match = re.match(r'^([1-9]\d?)/\d+', line_stripped)
                 special_case_match = re.match(r'^(13|37|74)\s+(cemento|metalli|legno)', line_stripped)
                 
@@ -370,9 +391,9 @@ class PrimusPDFExtractor:
             if not line_stripped:
                 continue
             
-            # Look for fraction pattern work items (like "19/35 4033", "20/36 4036")
-            # Pattern: progressive/reference reference_code
-            fraction_match = re.match(r'^(\d+)/\d+\s+\d+', line_stripped)
+            # Look for fraction pattern work items (like "19/35 4033", "20/36 4036", "1/1 Rimozione")
+            # Pattern: progressive/reference [reference_code OR description] (text is normalized)
+            fraction_match = re.match(r'^(\d+)/\d+(?:\s+\d+|\s+[A-Z])', line_stripped)
             
             if fraction_match:
                 # If we have a previous chunk, save it
