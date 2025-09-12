@@ -1,15 +1,33 @@
 import os
 import re
 import json
-
-from dotenv import load_dotenv
-import pdfplumber
-import google.generativeai as genai
-import concurrent.futures
-from tqdm import tqdm
+import subprocess
 import sys
 from typing import List, Dict, Optional, Tuple
 import logging
+
+# Setup logging first
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Check for poppler-utils dependency
+try:
+    result = subprocess.run(['pdftotext', '-v'], capture_output=True, text=True)
+    logger.info("poppler-utils is installed")
+except FileNotFoundError:
+    logger.error("poppler-utils is not installed. Please install it: apt-get install poppler-utils")
+    sys.exit(1)
+
+from dotenv import load_dotenv
+try:
+    import pdfplumber
+except ImportError as e:
+    logger.error(f"Failed to import pdfplumber: {e}")
+    sys.exit(1)
+    
+import google.generativeai as genai
+import concurrent.futures
+from tqdm import tqdm
 
 # Load environment variables
 load_dotenv()
@@ -17,10 +35,6 @@ load_dotenv()
 # Configuration
 API_MODEL_NAME = "gemini-1.5-pro-latest"
 MAX_WORKERS = 1  # Reduced for more stable processing
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Initialize Gemini API
 try:
@@ -131,11 +145,19 @@ class PrimusPDFExtractor:
         full_document_text = ""
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                    if page_text:
-                        cleaned_lines = [line for line in page_text.split('\n') if not self.is_junk_line(line)]
-                        full_document_text += "\n".join(cleaned_lines) + "\n"
+                logger.info(f"Opened PDF with {len(pdf.pages)} pages")
+                for i, page in enumerate(pdf.pages):
+                    try:
+                        page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                        if page_text:
+                            cleaned_lines = [line for line in page_text.split('\n') if not self.is_junk_line(line)]
+                            full_document_text += "\n".join(cleaned_lines) + "\n"
+                            logger.debug(f"Extracted {len(cleaned_lines)} lines from page {i+1}")
+                        else:
+                            logger.warning(f"No text extracted from page {i+1}")
+                    except Exception as e:
+                        logger.error(f"Error extracting text from page {i+1}: {e}")
+                        continue
 
             # Check if this is a Primus format with TARIFFA/DESIGNAZIONE columns
             tariffa_found = "TARIFFA" in full_document_text

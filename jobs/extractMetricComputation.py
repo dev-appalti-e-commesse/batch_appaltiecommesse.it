@@ -225,9 +225,32 @@ def calculate_total_amount(work_items: List[Dict]) -> float:
 def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
     """Call extract_primus_specialized.py to process PDF"""
     try:
+        # Verify PDF file exists and has content
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF file not found: {pdf_path}")
+            return None
+            
+        file_size = os.path.getsize(pdf_path)
+        logger.info(f"PDF file size: {file_size} bytes")
+        
+        if file_size == 0:
+            logger.error("PDF file is empty")
+            return None
+            
+        # Check if it's actually a PDF
+        with open(pdf_path, 'rb') as f:
+            header = f.read(5)
+            if not header.startswith(b'%PDF'):
+                logger.error(f"File does not appear to be a PDF. Header: {header}")
+                return None
+        
         # Get the directory of the current script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         primus_script = os.path.join(script_dir, 'extract_primus_specialized.py')
+        
+        logger.info(f"Running extraction script: {primus_script}")
+        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"Current working directory: {os.getcwd()}")
         
         # Call the script
         result = subprocess.run(
@@ -237,8 +260,14 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
             timeout=300  # 5 minutes timeout
         )
         
+        # Log stdout/stderr regardless of return code
+        if result.stdout:
+            logger.info(f"Extraction stdout: {result.stdout[:1000]}")  # First 1000 chars
+        if result.stderr:
+            logger.warning(f"Extraction stderr: {result.stderr[:1000]}")
+        
         if result.returncode != 0:
-            logger.error(f"Primus extraction failed: {result.stderr}")
+            logger.error(f"Primus extraction failed with return code {result.returncode}")
             return None
         
         # Read the output JSON file
@@ -248,10 +277,18 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
         
         if not os.path.exists(output_path):
             logger.error(f"Output file not found: {output_path}")
+            # List files in current directory for debugging
+            logger.info(f"Files in current directory: {os.listdir('.')[:20]}")
             return None
         
         with open(output_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        
+        # Log the number of items found
+        if 'workItems' in data:
+            logger.info(f"Loaded {len(data['workItems'])} work items from extraction")
+        else:
+            logger.warning("No workItems key in extracted data")
         
         # Clean up the output file
         try:
