@@ -242,10 +242,9 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
             return None
         
         # Read the output JSON file
-        # The extract_primus_specialized.py saves the file in the same directory as the PDF
-        pdf_dir = os.path.dirname(pdf_path)
+        # The extract_primus_specialized.py saves the file in the current working directory
         base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        output_path = os.path.join(pdf_dir, f"{base_name}_extracted_primus_specialized.json")
+        output_path = f"{base_name}_extracted_primus_specialized.json"
         
         if not os.path.exists(output_path):
             logger.error(f"Output file not found: {output_path}")
