@@ -78,6 +78,11 @@ jobs:
         terraform import aws_iam_role.ecs_task_execution_role appalti-batch-ecs-task-execution-role || true
         terraform import aws_iam_role.batch_job_role appalti-batch-batch-job-role || true
         terraform import aws_cloudwatch_log_group.batch_logs /aws/batch/appalti-batch || true
+        terraform import aws_secretsmanager_secret.batch_secrets appalti-batch-secrets || true
+        terraform import aws_batch_compute_environment.main appalti-batch-compute-env || true
+        terraform import aws_batch_job_queue.main appalti-batch-job-queue || true
+        terraform import aws_batch_job_definition.metric_computation appalti-batch-metric-computation || true
+        terraform import aws_batch_job_definition.metadata_extraction appalti-batch-metadata-extraction || true
         
         # Deploy infrastructure
         terraform plan
