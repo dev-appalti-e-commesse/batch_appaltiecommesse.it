@@ -252,11 +252,12 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
         logger.info(f"Python executable: {sys.executable}")
         logger.info(f"Current working directory: {os.getcwd()}")
         
-        # Call the script
+        # Call the script - IMPORTANT: set cwd to script directory so output file is created there
         result = subprocess.run(
             [sys.executable, primus_script, pdf_path],
             capture_output=True,
             text=True,
+            cwd=script_dir,  # Run in the jobs directory
             timeout=300  # 5 minutes timeout
         )
         
@@ -271,14 +272,14 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
             return None
         
         # Read the output JSON file
-        # The extract_primus_specialized.py saves the file in the current working directory
+        # The extract_primus_specialized.py saves the file in its working directory (script_dir)
         base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        output_path = f"{base_name}_extracted_primus_specialized.json"
+        output_path = os.path.join(script_dir, f"{base_name}_extracted_primus_specialized.json")
         
         if not os.path.exists(output_path):
             logger.error(f"Output file not found: {output_path}")
-            # List files in current directory for debugging
-            logger.info(f"Files in current directory: {os.listdir('.')[:20]}")
+            # List files in script directory for debugging
+            logger.info(f"Files in script directory: {os.listdir(script_dir)[:20]}")
             return None
         
         with open(output_path, 'r', encoding='utf-8') as f:

@@ -1,33 +1,15 @@
 import os
 import re
 import json
-import subprocess
-import sys
-from typing import List, Dict, Optional, Tuple
-import logging
-
-# Setup logging first
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# Check for poppler-utils dependency
-try:
-    result = subprocess.run(['pdftotext', '-v'], capture_output=True, text=True)
-    logger.info("poppler-utils is installed")
-except FileNotFoundError:
-    logger.error("poppler-utils is not installed. Please install it: apt-get install poppler-utils")
-    sys.exit(1)
 
 from dotenv import load_dotenv
-try:
-    import pdfplumber
-except ImportError as e:
-    logger.error(f"Failed to import pdfplumber: {e}")
-    sys.exit(1)
-    
+import pdfplumber
 import google.generativeai as genai
 import concurrent.futures
 from tqdm import tqdm
+import sys
+from typing import List, Dict, Optional, Tuple
+import logging
 
 # Load environment variables
 load_dotenv()
@@ -35,6 +17,10 @@ load_dotenv()
 # Configuration
 API_MODEL_NAME = "gemini-1.5-pro-latest"
 MAX_WORKERS = 1  # Reduced for more stable processing
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Initialize Gemini API
 try:
@@ -289,7 +275,6 @@ class PrimusPDFExtractor:
                 # Add it to the current chunk, don't start a new one
                 if current_chunk:
                     current_chunk.append(line_stripped)
-                    logger.debug(f"Added reference code continuation: {line_stripped}")
                 
             else:
                 # Check for actual work item starts - multiple patterns:
