@@ -172,18 +172,35 @@ class PrimusPDFExtractor:
             # DEBUG: Show first 1000 characters of extracted text
             logger.info(f"DEBUG - First 1000 chars of extracted text: {repr(full_document_text[:1000])}")
             
+            # CHECKPOINT 1
+            logger.info("CHECKPOINT 1: About to process debug lines")
+            
             # DEBUG: Show first 20 lines after cleaning
             lines_sample = full_document_text.split('\n')[:20]
-            logger.info(f"DEBUG - First 20 lines after cleaning:")
+            logger.info(f"DEBUG - First 20 lines after cleaning ({len(lines_sample)} total):")
+            
+            # CHECKPOINT 2
+            logger.info("CHECKPOINT 2: Starting line iteration")
+            
             for i, line in enumerate(lines_sample):
                 if line.strip():
                     logger.info(f"  Line {i:2d}: {repr(line.strip())}")
+                    
+            # CHECKPOINT 3
+            logger.info("CHECKPOINT 3: Finished debug lines, about to check format")
             
             if (tariffa_found and designazione_found):
                 logger.info("Detected Primus format - trying Primus extraction methods")
                 
+                # CHECKPOINT 4
+                logger.info("CHECKPOINT 4: About to call extract_primus_format_chunks")
+                
                 # First try the specialized TARIFFA/DESIGNAZIONE method
                 primus_chunks = self.extract_primus_format_chunks(full_document_text)
+                
+                # CHECKPOINT 5
+                logger.info(f"CHECKPOINT 5: extract_primus_format_chunks returned {len(primus_chunks) if primus_chunks else 0} chunks")
+                
                 if primus_chunks and len(primus_chunks) > 200:  # Higher threshold - need many chunks for large PDFs
                     logger.info(f"Primus method returned {len(primus_chunks)} chunks")
                     return primus_chunks
