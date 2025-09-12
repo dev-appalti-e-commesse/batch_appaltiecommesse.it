@@ -16,3 +16,19 @@ python-dotenv==1.0.0
 
 # Logging enhancements (optional)
 colorlog==6.8.0
+
+# PDF processing
+PyMuPDF==1.23.26
+pdfplumber==0.11.0
+google-generativeai==0.3.2
+
+# MongoDB driver
+pymongo==4.6.1
+
+# Progress bar for batch processing
+tqdm==4.66.1
+
+# Testing dependencies
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-mock==3.12.0
