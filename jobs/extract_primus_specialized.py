@@ -150,6 +150,16 @@ class PrimusPDFExtractor:
             designazione_found = "DESIGNAZIONE DEI LAVORI" in full_document_text
             logger.info(f"Format detection: TARIFFA={tariffa_found}, DESIGNAZIONE DEI LAVORI={designazione_found}")
             
+            # DEBUG: Show first 1000 characters of extracted text
+            logger.info(f"DEBUG - First 1000 chars of extracted text: {repr(full_document_text[:1000])}")
+            
+            # DEBUG: Show first 20 lines after cleaning
+            lines_sample = full_document_text.split('\n')[:20]
+            logger.info(f"DEBUG - First 20 lines after cleaning:")
+            for i, line in enumerate(lines_sample):
+                if line.strip():
+                    logger.info(f"  Line {i:2d}: {repr(line.strip())}")
+            
             if (tariffa_found and designazione_found):
                 logger.info("Detected Primus format - trying Primus extraction methods")
                 
