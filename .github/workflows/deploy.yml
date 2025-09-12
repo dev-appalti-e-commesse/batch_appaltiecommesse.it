@@ -65,8 +65,7 @@ jobs:
         aws_region = "${{ env.AWS_REGION }}"
         account_id = "${ACCOUNT_ID}"
         project_name = "${{ env.PROJECT_NAME }}"
-        environment = "prod"
-        ecr_repository_name = "${{ env.PROJECT_NAME }}-jobs"
+        environment = "production"
         EOF
         
         # Deploy infrastructure

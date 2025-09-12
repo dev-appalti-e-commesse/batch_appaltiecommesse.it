@@ -27,6 +27,11 @@ variable "project_name" {
   default     = "appalti-batch"
 }
 
+variable "account_id" {
+  description = "AWS Account ID"
+  type        = string
+}
+
 locals {
   common_tags = {
     Environment = var.environment
@@ -114,6 +119,28 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_role" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
+# Policy for execution role to access secrets
+resource "aws_iam_role_policy" "ecs_secrets_policy" {
+  name = "${var.project_name}-ecs-secrets-policy"
+  role = aws_iam_role.ecs_task_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.batch_secrets.arn
+        ]
+      }
+    ]
+  })
+}
+
 # Job Role for containers
 resource "aws_iam_role" "batch_job_role" {
   name = "${var.project_name}-batch-job-role"
@@ -134,7 +161,34 @@ resource "aws_iam_role" "batch_job_role" {
   tags = local.common_tags
 }
 
-# Policy for job role (add S3, DynamoDB permissions as needed)
+# AWS Secrets Manager for secure configuration
+resource "aws_secretsmanager_secret" "batch_secrets" {
+  name        = "appalti-batch-secrets"
+  description = "Secrets for AWS Batch jobs (extractMetricComputation.py)"
+  
+  tags = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "batch_secrets" {
+  secret_id = aws_secretsmanager_secret.batch_secrets.id
+  
+  # Placeholder JSON structure - will be overwritten by GitHub Actions
+  secret_string = jsonencode({
+    MONGO_URI      = "placeholder-will-be-set-by-github-actions"
+    SMTP_HOST      = "smtp.gmail.com"
+    SMTP_PORT      = "587"
+    SMTP_USER      = "placeholder-will-be-set-by-github-actions"
+    SMTP_PASSWORD  = "placeholder-will-be-set-by-github-actions"
+    EMAIL_FROM     = "placeholder-will-be-set-by-github-actions"
+    GOOGLE_API_KEY = "placeholder-will-be-set-by-github-actions"
+  })
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+# Policy for job role (add S3, Secrets Manager permissions)
 resource "aws_iam_role_policy" "batch_job_policy" {
   name = "${var.project_name}-batch-job-policy"
   role = aws_iam_role.batch_job_role.id
@@ -159,8 +213,20 @@ resource "aws_iam_role_policy" "batch_job_policy" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::${var.project_name}-*",
-          "arn:aws:s3:::${var.project_name}-*/*"
+          "arn:aws:s3:::private-tender-documents",
+          "arn:aws:s3:::private-tender-documents/*",
+          "arn:aws:s3:::metric-computation-documents",
+          "arn:aws:s3:::metric-computation-documents/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.batch_secrets.arn
         ]
       }
     ]
@@ -226,11 +292,43 @@ resource "aws_batch_job_definition" "metric_computation" {
     resourceRequirements = [
       {
         type  = "VCPU"
-        value = "0.25"
+        value = "1"
       },
       {
         type  = "MEMORY"
-        value = "512"
+        value = "2048"
+      }
+    ]
+    
+    # Secrets from AWS Secrets Manager
+    secrets = [
+      {
+        name      = "MONGO_URI"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:MONGO_URI::"
+      },
+      {
+        name      = "SMTP_HOST"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:SMTP_HOST::"
+      },
+      {
+        name      = "SMTP_PORT"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:SMTP_PORT::"
+      },
+      {
+        name      = "SMTP_USER"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:SMTP_USER::"
+      },
+      {
+        name      = "SMTP_PASSWORD"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:SMTP_PASSWORD::"
+      },
+      {
+        name      = "EMAIL_FROM"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:EMAIL_FROM::"
+      },
+      {
+        name      = "GOOGLE_API_KEY"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:GOOGLE_API_KEY::"
       }
     ]
     
@@ -238,6 +336,14 @@ resource "aws_batch_job_definition" "metric_computation" {
       {
         name  = "JOB_TYPE"
         value = "extractMetricComputation"
+      },
+      {
+        name  = "AWS_REGION"
+        value = var.aws_region
+      },
+      {
+        name  = "DATABASE_NAME"
+        value = "appalti_e_commesse"
       }
     ]
     
@@ -286,10 +392,22 @@ resource "aws_batch_job_definition" "metadata_extraction" {
       }
     ]
     
+    # Secrets from AWS Secrets Manager
+    secrets = [
+      {
+        name      = "GOOGLE_API_KEY"
+        valueFrom = "${aws_secretsmanager_secret.batch_secrets.arn}:GOOGLE_API_KEY::"
+      }
+    ]
+    
     environment = [
       {
         name  = "JOB_TYPE"
         value = "extractMetadata"
+      },
+      {
+        name  = "AWS_REGION"
+        value = var.aws_region
       }
     ]
     
