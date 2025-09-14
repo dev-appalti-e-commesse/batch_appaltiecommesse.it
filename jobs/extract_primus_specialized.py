@@ -208,19 +208,24 @@ class PrimusPDFExtractor:
                 # CHECKPOINT 5
                 logger.info(f"CHECKPOINT 5: extract_primus_format_chunks returned {len(primus_chunks) if primus_chunks else 0} chunks")
                 
-                if primus_chunks and len(primus_chunks) > 200:  # Higher threshold - need many chunks for large PDFs
-                    logger.info(f"Primus method returned {len(primus_chunks)} chunks")
+                # Use dynamic threshold based on text length - small PDFs need lower threshold
+                text_length = len(full_document_text)
+                threshold = 5 if text_length < 5000 else 200  # Low threshold for small PDFs
+                logger.info(f"Using threshold {threshold} for text length {text_length}")
+                
+                if primus_chunks and len(primus_chunks) >= threshold:
+                    logger.info(f"Primus method returned {len(primus_chunks)} chunks - ACCEPTED!")
                     return primus_chunks
                 else:
-                    logger.warning(f"Primus method returned only {len(primus_chunks) if primus_chunks else 0} chunks")
+                    logger.warning(f"Primus method returned only {len(primus_chunks) if primus_chunks else 0} chunks (threshold: {threshold})")
                 
                 # Try the fraction format method
                 fraction_chunks = self.extract_fraction_format_chunks(full_document_text)
-                if fraction_chunks and len(fraction_chunks) > 200:  # Higher threshold - need many chunks for large PDFs
-                    logger.info(f"Fraction format method returned {len(fraction_chunks)} chunks")
+                if fraction_chunks and len(fraction_chunks) >= threshold:
+                    logger.info(f"Fraction format method returned {len(fraction_chunks)} chunks - ACCEPTED!")
                     return fraction_chunks
                 else:
-                    logger.warning(f"Fraction method returned only {len(fraction_chunks) if fraction_chunks else 0} chunks")
+                    logger.warning(f"Fraction method returned only {len(fraction_chunks) if fraction_chunks else 0} chunks (threshold: {threshold})")
                 
                 logger.warning("Both specialized Primus methods returned insufficient chunks, falling back to universal patterns")
 
@@ -293,7 +298,6 @@ class PrimusPDFExtractor:
             if not best_chunks and "1/1 Rimozione" in full_document_text:
                 logger.info("Trying manual pattern recognition")
                 # Split on pattern like "1/1", "2/2", "3/3" etc
-                import re
                 manual_chunks = re.split(r'\n(?=\d+/\d+\s)', full_document_text)
                 valid_manual = [chunk.strip() for chunk in manual_chunks 
                               if chunk.strip() and "SOMMANO" in chunk]
