@@ -575,12 +575,13 @@ class PrimusPDFExtractor:
         ---
         """
         
-        # If Gemini is not available, try basic regex extraction
+        # If Gemini is not available, return None
         if not GEMINI_ENABLED or model is None:
-            logger.debug("Gemini API not available, using basic extraction")
-            return self.extract_basic_work_item(text_chunk)
+            logger.debug("Gemini API not available")
+            return None
         
         try:
+            # Use modern Gemini API with JSON response guaranteed
             generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
             response = model.generate_content(prompt, generation_config=generation_config, request_options={"timeout": 60})
             
@@ -591,8 +592,7 @@ class PrimusPDFExtractor:
 
         except Exception as e:
             logger.error(f"Error in Gemini extraction: {e}")
-            # Fallback to basic extraction
-            return self.extract_basic_work_item(text_chunk)
+            return None
 
 
 def main(pdf_path: str):
