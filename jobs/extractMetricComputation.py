@@ -252,20 +252,29 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
         logger.info(f"Python executable: {sys.executable}")
         logger.info(f"Current working directory: {os.getcwd()}")
         
-        # Call the script - IMPORTANT: set cwd to script directory so output file is created there
+        # Call the script - Run from script directory so imports work correctly
         result = subprocess.run(
             [sys.executable, primus_script, pdf_path],
             capture_output=True,
             text=True,
-            cwd=script_dir,  # Run in the jobs directory
+            cwd=script_dir,  # Run in the jobs directory for imports
             timeout=300  # 5 minutes timeout
         )
         
         # Log stdout/stderr regardless of return code
         if result.stdout:
-            logger.info(f"Extraction stdout: {result.stdout[:1000]}")  # First 1000 chars
+            logger.info(f"Extraction stdout: {result.stdout[:5000]}")  # First 5000 chars
         if result.stderr:
-            logger.warning(f"Extraction stderr: {result.stderr[:1000]}")
+            # Log stderr in chunks to see everything
+            stderr_len = len(result.stderr)
+            logger.warning(f"Extraction stderr length: {stderr_len} chars")
+            if stderr_len <= 5000:
+                logger.warning(f"Extraction stderr: {result.stderr}")
+            else:
+                # Log in chunks
+                for i in range(0, stderr_len, 5000):
+                    chunk = result.stderr[i:i+5000]
+                    logger.warning(f"Extraction stderr chunk {i//5000 + 1}: {chunk}")
         
         if result.returncode != 0:
             logger.error(f"Primus extraction failed with return code {result.returncode}")

@@ -23,16 +23,23 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Initialize Gemini API
+GEMINI_ENABLED = False
+model = None
+
 try:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        raise ValueError("GOOGLE_API_KEY not found in .env file or environment variables.")
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(API_MODEL_NAME)
-    logger.info("Gemini API initialized successfully")
+        logger.warning("GOOGLE_API_KEY not found - Gemini API disabled, will extract chunks only")
+        GEMINI_ENABLED = False
+    else:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(API_MODEL_NAME)
+        logger.info("Gemini API initialized successfully!!")
+        GEMINI_ENABLED = True
 except Exception as e:
     logger.error(f"Failed to initialize Gemini client: {e}")
-    sys.exit(1)
+    logger.warning("Continuing without Gemini API - will extract chunks only")
+    GEMINI_ENABLED = False
 
 
 class PrimusWorkItem:
@@ -172,13 +179,8 @@ class PrimusPDFExtractor:
             # DEBUG: Show first 1000 characters of extracted text
             logger.info(f"DEBUG - First 1000 chars of extracted text: {repr(full_document_text[:1000])}")
             
-            # Force flush to ensure logs are written
-            import sys
-            sys.stderr.flush()
-            
             # CHECKPOINT 1
             logger.info("CHECKPOINT 1: About to process debug lines")
-            sys.stderr.flush()
             
             # DEBUG: Show first 20 lines after cleaning
             lines_sample = full_document_text.split('\n')[:20]
@@ -222,6 +224,11 @@ class PrimusPDFExtractor:
                 
                 logger.warning("Both specialized Primus methods returned insufficient chunks, falling back to universal patterns")
 
+            # DEBUG: Show text characteristics for debugging
+            logger.info(f"DEBUG - Text length: {len(full_document_text)}")
+            logger.info(f"DEBUG - Contains SOMMANO: {'SOMMANO' in full_document_text}")
+            logger.info(f"DEBUG - Newline type: {repr(full_document_text[:200])}")
+            
             # Try multiple patterns to identify work item starts (fallback for other Primus variants)
             patterns_to_try = [
                 # Pattern 1: "1 / 17" format but only split when followed by another fraction pattern
@@ -240,13 +247,19 @@ class PrimusPDFExtractor:
                     item_start_pattern = re.compile(pattern)
                     all_chunks = item_start_pattern.split(full_document_text)
                     
+                    logger.info(f"Pattern '{pattern}': split into {len(all_chunks)} parts")
+                    
                     # Filter chunks that contain "SOMMANO" (indicating complete work items)
                     valid_chunks = [
                         chunk.strip() for chunk in all_chunks 
                         if chunk.strip() and "SOMMANO" in chunk and len(chunk.strip()) > 50
                     ]
                     
-                    logger.info(f"Pattern '{pattern}' found {len(valid_chunks)} chunks")
+                    logger.info(f"Pattern '{pattern}' found {len(valid_chunks)} valid chunks")
+                    
+                    # DEBUG: Show what we found
+                    if len(valid_chunks) > 0:
+                        logger.info(f"Sample chunk: {repr(valid_chunks[0][:200])}")
                     
                     if len(valid_chunks) > best_count:
                         best_chunks = valid_chunks
@@ -258,7 +271,7 @@ class PrimusPDFExtractor:
             
             if not best_chunks:
                 # Fallback: Split by "SOMMANO" and try to reconstruct
-                logger.info("Trying fallback method: splitting by SOMMANO")
+                logger.info("Trying SOMMANO fallback method")
                 lines = full_document_text.split('\n')
                 chunks = []
                 current_chunk = []
@@ -267,12 +280,26 @@ class PrimusPDFExtractor:
                     current_chunk.append(line)
                     if "SOMMANO" in line and len(current_chunk) > 5:
                         chunk_text = '\n'.join(current_chunk)
-                        # Look for a number at the start of the chunk
-                        if re.search(r'^\d+\s+', chunk_text.strip()):
+                        # Look for a number at the start of the chunk (more flexible pattern)
+                        if re.search(r'^\d+[/\s]', chunk_text.strip()) or re.search(r'^\d+\s+[A-Z]', chunk_text.strip()):
                             chunks.append(chunk_text.strip())
+                            logger.info(f"SOMMANO method found chunk: {repr(chunk_text[:100])}")
                         current_chunk = []
                 
+                logger.info(f"SOMMANO method found {len(chunks)} chunks")
                 best_chunks = chunks
+            
+            # Last resort: Manual split if we have the exact pattern
+            if not best_chunks and "1/1 Rimozione" in full_document_text:
+                logger.info("Trying manual pattern recognition")
+                # Split on pattern like "1/1", "2/2", "3/3" etc
+                import re
+                manual_chunks = re.split(r'\n(?=\d+/\d+\s)', full_document_text)
+                valid_manual = [chunk.strip() for chunk in manual_chunks 
+                              if chunk.strip() and "SOMMANO" in chunk]
+                if valid_manual:
+                    logger.info(f"Manual method found {len(valid_manual)} chunks")
+                    best_chunks = valid_manual
             
             logger.info(f"Successfully identified {len(best_chunks)} potential work item chunks after cleaning.")
             
@@ -544,6 +571,11 @@ class PrimusPDFExtractor:
         ---
         """
         
+        # If Gemini is not available, try basic regex extraction
+        if not GEMINI_ENABLED or model is None:
+            logger.debug("Gemini API not available, using basic extraction")
+            return self.extract_basic_work_item(text_chunk)
+        
         try:
             generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
             response = model.generate_content(prompt, generation_config=generation_config, request_options={"timeout": 60})
@@ -555,7 +587,8 @@ class PrimusPDFExtractor:
 
         except Exception as e:
             logger.error(f"Error in Gemini extraction: {e}")
-            return None
+            # Fallback to basic extraction
+            return self.extract_basic_work_item(text_chunk)
 
 
 def main(pdf_path: str):
