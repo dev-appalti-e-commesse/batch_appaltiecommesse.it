@@ -175,8 +175,8 @@ resource "aws_secretsmanager_secret_version" "batch_secrets" {
   # Placeholder JSON structure - will be overwritten by GitHub Actions
   secret_string = jsonencode({
     MONGO_URI      = "placeholder-will-be-set-by-github-actions"
-    SMTP_HOST      = "smtp.gmail.com"
-    SMTP_PORT      = "587"
+    SMTP_HOST      = "smtp.zoho.eu"
+    SMTP_PORT      = "465"
     SMTP_USER      = "placeholder-will-be-set-by-github-actions"
     SMTP_PASSWORD  = "placeholder-will-be-set-by-github-actions"
     EMAIL_FROM     = "placeholder-will-be-set-by-github-actions"
