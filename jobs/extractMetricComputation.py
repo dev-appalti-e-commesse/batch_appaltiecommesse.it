@@ -166,13 +166,14 @@ def validate_and_normalize_workitems(work_items: List[Dict]) -> None:
         
         # 1. Assegna progressiveNumber (intero progressivo da 1)
         item['progressiveNumber'] = i + 1
-        
+        """
         # 2. Verifica referenceCode OBBLIGATORIO
         if 'referenceCode' not in item or not item['referenceCode']:
             raise ValueError(f"workItem {i}: referenceCode è obbligatorio")
         
         if not isinstance(item['referenceCode'], str):
             raise ValueError(f"workItem {i}: referenceCode deve essere string, ricevuto {type(item['referenceCode'])}")
+        """
         
         # 3. Gestisci description (opzionale)
         if 'description' not in item:
