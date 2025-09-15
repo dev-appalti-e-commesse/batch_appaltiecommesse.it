@@ -261,7 +261,7 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
             capture_output=True,
             text=True,
             cwd=script_dir,  # Run in the jobs directory for imports
-            timeout=300  # 5 minutes timeout
+            timeout=14400  # 4 hours timeout
         )
         
         # Log stdout/stderr regardless of return code
