@@ -256,33 +256,121 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
         logger.info(f"Python executable: {sys.executable}")
         logger.info(f"Current working directory: {os.getcwd()}")
         
-        # Call the script - Run from script directory so imports work correctly
-        result = subprocess.run(
+        # Call the script with real-time output streaming
+        import threading
+        import queue
+        import time
+
+        def read_output(pipe, output_queue, pipe_name):
+            """Read output from pipe and put in queue"""
+            try:
+                for line in iter(pipe.readline, ''):
+                    if line:
+                        output_queue.put((pipe_name, line.rstrip()))
+                pipe.close()
+            except Exception as e:
+                output_queue.put(('error', f"Error reading {pipe_name}: {e}"))
+            finally:
+                output_queue.put((pipe_name, None))  # Signal end
+
+        # Start subprocess
+        process = subprocess.Popen(
             [sys.executable, primus_script, pdf_path],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            cwd=script_dir,  # Run in the jobs directory for imports
-            timeout=14400  # 4 hours timeout
+            cwd=script_dir,
+            bufsize=1,
+            universal_newlines=True
         )
-        
-        # Log stdout/stderr regardless of return code
-        if result.stdout:
-            logger.info(f"Extraction stdout: {result.stdout[:5000]}")  # First 5000 chars
-        if result.stderr:
-            # Log stderr in chunks to see everything
-            stderr_len = len(result.stderr)
-            logger.warning(f"Extraction stderr length: {stderr_len} chars")
-            if stderr_len <= 5000:
-                logger.warning(f"Extraction stderr: {result.stderr}")
-            else:
-                # Log in chunks
-                for i in range(0, stderr_len, 5000):
-                    chunk = result.stderr[i:i+5000]
-                    logger.warning(f"Extraction stderr chunk {i//5000 + 1}: {chunk}")
-        
-        if result.returncode != 0:
-            logger.error(f"Primus extraction failed with return code {result.returncode}")
+
+        # Create queues and threads for reading output
+        output_queue = queue.Queue()
+
+        stdout_thread = threading.Thread(
+            target=read_output,
+            args=(process.stdout, output_queue, 'stdout')
+        )
+        stderr_thread = threading.Thread(
+            target=read_output,
+            args=(process.stderr, output_queue, 'stderr')
+        )
+
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+
+        # Track output and timing
+        all_stdout = []
+        all_stderr = []
+        start_time = time.time()
+        timeout_seconds = 14400  # 4 hours
+        streams_ended = {'stdout': False, 'stderr': False}
+
+        # Process output in real-time
+        try:
+            while not all(streams_ended.values()) or not output_queue.empty():
+                # Check timeout
+                if time.time() - start_time > timeout_seconds:
+                    process.kill()
+                    logger.error("Primus extraction timed out")
+                    return None
+
+                try:
+                    # Get output with short timeout to allow timeout checking
+                    pipe_name, line = output_queue.get(timeout=1.0)
+
+                    if line is None:
+                        # Stream ended
+                        streams_ended[pipe_name] = True
+                        continue
+
+                    # Store output for later analysis
+                    if pipe_name == 'stdout':
+                        all_stdout.append(line)
+                    elif pipe_name == 'stderr':
+                        all_stderr.append(line)
+
+                    # Log immediately to CloudWatch
+                    if pipe_name == 'stdout':
+                        if line.startswith("[EXTRACTION]"):
+                            logger.info(line)
+                        elif line.strip():
+                            logger.info(f"Extraction: {line}")
+                    elif pipe_name == 'stderr':
+                        if line.strip():
+                            logger.warning(f"Extraction stderr: {line}")
+
+                except queue.Empty:
+                    # No output available, continue to check timeout
+                    continue
+
+            # Wait for process to complete
+            returncode = process.wait()
+
+            # Log summary
+            logger.info(f"Extraction completed with return code: {returncode}")
+            logger.info(f"Total stdout lines: {len(all_stdout)}")
+            logger.info(f"Total stderr lines: {len(all_stderr)}")
+
+            if returncode != 0:
+                logger.error(f"Primus extraction failed with return code {returncode}")
+                # Log last few lines for debugging
+                if all_stderr:
+                    logger.error("Last stderr lines:")
+                    for line in all_stderr[-10:]:
+                        logger.error(f"  {line}")
+                return None
+
+        except Exception as e:
+            process.kill()
+            logger.error(f"Error during extraction streaming: {str(e)}")
             return None
+        finally:
+            # Ensure threads complete
+            stdout_thread.join(timeout=5)
+            stderr_thread.join(timeout=5)
         
         # Read the output JSON file
         # The extract_primus_specialized.py saves the file in its working directory (script_dir)
