@@ -53,8 +53,11 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
         
         msg.attach(MIMEText(body, 'plain'))
         
-        server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
-        server.starttls()
+        if SMTP_PORT == 465:
+            server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
+        else:
+            server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
+            server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
         
         text = msg.as_string()
