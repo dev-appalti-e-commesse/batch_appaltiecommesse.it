@@ -152,8 +152,10 @@ class PrimusPDFExtractor:
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 logger.info(f"Opened PDF with {len(pdf.pages)} pages")
+                print(f"[EXTRACTION] Starting to process {len(pdf.pages)} pages...", flush=True)
                 for i, page in enumerate(pdf.pages):
                     try:
+                        print(f"[EXTRACTION] Processing page {i+1}/{len(pdf.pages)}...", flush=True)
                         page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
                         if page_text:
                             # Clean and normalize lines for consistent cross-platform parsing
@@ -613,6 +615,7 @@ def main(pdf_path: str):
         return
     
     logger.info(f"Processing {len(work_item_chunks)} work item chunks with Gemini...")
+    print(f"[EXTRACTION] Starting Gemini processing of {len(work_item_chunks)} chunks...", flush=True)
     
     # Process chunks with Gemini using universal extractor approach
     extracted_items = []
@@ -625,9 +628,11 @@ def main(pdf_path: str):
             for chunk in work_item_chunks
         }
         
-        for i, future in enumerate(tqdm(concurrent.futures.as_completed(future_to_chunk), 
-                          total=len(work_item_chunks), 
+        for i, future in enumerate(tqdm(concurrent.futures.as_completed(future_to_chunk),
+                          total=len(work_item_chunks),
                           desc="Processing work items")):
+            if (i + 1) % 10 == 0:  # Progress every 10 items
+                print(f"[EXTRACTION] Processed {i+1}/{len(work_item_chunks)} work items...", flush=True)
             try:
                 chunk = future_to_chunk[future]
                 result = future.result()
@@ -681,11 +686,12 @@ def main(pdf_path: str):
         json.dump(final_output, f, ensure_ascii=False, indent=2)
     
     logger.info("Primus extraction completed successfully!")
+    print(f"[EXTRACTION] Completed! Extracted {len(extracted_items)} work items.", flush=True)
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python extract_primus_specialized.py <path_to_pdf_file>")
+        print("Usage: python extract_primus_specialized.py <path_to_pdf_file>", flush=True)
         sys.exit(1)
     
     pdf_file_path = sys.argv[1]
