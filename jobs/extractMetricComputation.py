@@ -7,7 +7,7 @@ import tempfile
 import subprocess
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 from bson import ObjectId
 from bson.errors import InvalidId
 import boto3
@@ -122,6 +122,9 @@ def download_s3_file(s3_url: str) -> Optional[str]:
                 raise ValueError(f"Cannot parse S3 URL: {s3_url}")
         
         logger.info(f"Downloading from S3 - Bucket: {bucket}, Key: {key}")
+        # URL decode the key to handle special characters like spaces
+        key = unquote(key)
+        logger.info(f"Downloading from S3 - Bucket: {bucket}, Decoded Key: {key}")
         
         # Create temporary file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
