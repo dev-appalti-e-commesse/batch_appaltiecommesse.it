@@ -8,6 +8,7 @@ import subprocess
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from urllib.parse import urlparse, unquote
+import os
 from bson import ObjectId
 from bson.errors import InvalidId
 import boto3
@@ -438,12 +439,12 @@ def verify_document_exists(db_client: MongoClient, doc_type: str, doc_id: str) -
         return False
 
 
-def update_document(db_client: MongoClient, doc_type: str, doc_id: str, 
+def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
                    work_items: List[Dict], total_amount: float) -> bool:
     """Update document in MongoDB with workItems and totalAmount"""
     try:
         db = db_client[DATABASE_NAME]
-        
+
         # Choose collection and field names based on type
         if doc_type == 'privateTender':
             collection = db['private_tenders']
@@ -458,36 +459,39 @@ def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
                 'content.totalAmount': total_amount
             }
         else:
-            logger.error(f"Invalid document type: {doc_type}")
+            logger.error(f"Failed to update database - Invalid document type: {doc_type}")
             return False
-        
+
         # Update document using $set for specific fields
         result = collection.update_one(
             {'_id': ObjectId(doc_id)},
             {'$set': update_fields}
         )
-        
-        if result.modified_count > 0:
-            logger.info(f"Document updated successfully: {doc_id}")
+
+        if result.matched_count == 0:
+            logger.error(f"Failed to update database - Document not found in {collection.name}: {doc_id}")
+            return False
+        elif result.modified_count == 0:
+            logger.warning(f"Document not modified (may already have same values): {doc_id}")
             return True
         else:
-            logger.warning(f"Document not modified: {doc_id}")
-            return False
-            
+            logger.info(f"Document updated successfully: {doc_id} (modified {result.modified_count} fields)")
+            return True
+
     except Exception as e:
-        logger.error(f"Error updating document: {str(e)}")
+        logger.error(f"Failed to update database - MongoDB error in {collection.name if 'collection' in locals() else 'unknown'} for DocID {doc_id}: {str(e)}")
         return False
 
 
 def main():
     logger.info("Starting MetricComputation service")
-    
+
     job_id = os.environ.get('AWS_BATCH_JOB_ID', 'local-test')
-    
+
     # Initialize variables for cleanup
     temp_file_path = None
     mongo_client = None
-    
+
     try:
         # Get parameters from environment
         user_email = get_header('x-user-email')
@@ -496,6 +500,9 @@ def main():
         doc_id = get_param('id')
         title = get_param('title')
         doc_type = get_param('type')
+
+        # Extract filename from S3 URL
+        filename = os.path.basename(urlparse(s3_url).path) if s3_url else 'documento'
         
         logger.info(f"Job ID: {job_id}")
         logger.info(f"Headers: email={user_email}, company={user_company_id}")
@@ -509,9 +516,6 @@ def main():
         if not validate_objectid(doc_id):
             error_msg = f"Invalid MongoDB ObjectId: {doc_id}"
             logger.error(error_msg)
-            send_email(user_email, 
-                      f"Errore nell'estrazione del computo {title}",
-                      f"ID documento non valido: {doc_id}")
             raise ValueError(error_msg)
         
         # Connect to MongoDB
@@ -523,9 +527,6 @@ def main():
         if not verify_document_exists(mongo_client, doc_type, doc_id):
             error_msg = f"Document not found: {doc_id} in {doc_type}"
             logger.error(error_msg)
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title}",
-                      f"Documento non trovato nel database")
             raise ValueError(error_msg)
         
         # Download file from S3
@@ -534,9 +535,6 @@ def main():
         if not temp_file_path:
             error_msg = "Failed to download file from S3"
             logger.error(error_msg)
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title}",
-                      "Impossibile scaricare il file dal server")
             raise ValueError(error_msg)
         
         # Process PDF with Primus extractor
@@ -546,9 +544,6 @@ def main():
         if not extraction_result or 'workItems' not in extraction_result:
             error_msg = "Failed to extract workItems from PDF"
             logger.error(error_msg)
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title}",
-                      "Impossibile estrarre le voci di computo dal PDF")
             raise ValueError(error_msg)
         
         work_items = extraction_result['workItems']
@@ -562,9 +557,6 @@ def main():
         except ValueError as e:
             error_msg = f"Validation error: {str(e)}"
             logger.error(error_msg)
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title}",
-                      f"Errore nella validazione dei dati estratti: {str(e)}")
             raise
         
         # Calculate total amount
@@ -575,20 +567,33 @@ def main():
         # Update database
         logger.info("Updating database...")
         if not update_document(mongo_client, doc_type, doc_id, work_items, total_amount):
-            error_msg = "Failed to update database"
-            logger.error(error_msg)
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title}",
-                      "Impossibile aggiornare il database")
-            raise ValueError(error_msg)
+            # Error details already logged in update_document function
+            raise ValueError("Failed to update database")
         
         # Success - send success email
         logger.info("Process completed successfully")
-        send_email(user_email,
-                  f"Estrazione completata: {title}",
-                  f"Abbiamo estratto correttamente il computo metrico {title}\\n\\n"
-                  f"Voci estratte: {len(work_items)}\\n"
-                  f"Importo totale: €{total_amount:,.2f}")
+
+        # Determine document type labels
+        if doc_type == 'privateTender':
+            doc_label = "della gara"
+            doc_label_for = "per la gara"
+            doc_label_edit = "della gara"
+        else:  # metricComputation
+            doc_label = "del computo metrico"
+            doc_label_for = "per il computo metrico"
+            doc_label_edit = "del computo metrico"
+
+        email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
+        email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
+                     f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
+                     f"siano state estratte correttamente.\n\n"
+                     f"Controlla se il valore totale estratto corrisponde al valore totale nel "
+                     f"file del computo metrico.\n\n"
+                     f"Dettagli estrazione:\n"
+                     f"- Voci estratte: {len(work_items)}\n"
+                     f"- Importo totale: €{total_amount:,.2f}")
+
+        send_email(user_email, email_subject, email_body)
         
         # Log final result
         result = {
@@ -606,12 +611,50 @@ def main():
         logger.info(f"Result: {json.dumps(result, indent=2)}")
         
     except Exception as e:
-        # Log error and send error email
-        logger.error(f"Error during processing: {str(e)}")
-        if user_email:
-            send_email(user_email,
-                      f"Errore nell'estrazione del computo {title if title else ''}",
-                      f"Ci sono stati errori nell'estrazione del computo: {str(e)}")
+        # Log error and send single error email
+        logger.error(f"Job failed - Error during processing: {str(e)}")
+        if user_email and title and doc_type:
+            # Determine document type labels
+            if doc_type == 'privateTender':
+                doc_label = "della gara"
+                doc_label_for = "per la gara"
+                doc_label_edit = "della gara"
+            else:  # metricComputation
+                doc_label = "del computo metrico"
+                doc_label_for = "per il computo metrico"
+                doc_label_edit = "del computo metrico"
+
+            # Get filename if available
+            if 's3_url' in locals() and s3_url:
+                filename = os.path.basename(urlparse(s3_url).path)
+            else:
+                filename = 'documento'
+
+            # Determine specific error details for logging (not for user)
+            if "Invalid MongoDB ObjectId" in str(e):
+                error_detail = "ID documento non valido"
+            elif "Document not found" in str(e):
+                error_detail = "Documento non trovato nel database"
+            elif "Failed to download file from S3" in str(e):
+                error_detail = "Impossibile scaricare il file dal server"
+            elif "Failed to extract workItems" in str(e):
+                error_detail = "Impossibile estrarre le voci di computo dal PDF"
+            elif "Validation error" in str(e):
+                error_detail = f"Errore nella validazione: {str(e).replace('Validation error: ', '')}"
+            elif "Failed to update database" in str(e):
+                error_detail = "Impossibile aggiornare il database"
+            else:
+                error_detail = str(e)
+
+            logger.error(f"Error detail for debugging: {error_detail}")
+
+            # Send email with standard message (same as success but indicates there was an error)
+            email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
+            email_body = (f"Si è verificato un errore durante l'estrazione del computo metrico {doc_label_for} {title}.\n\n"
+                         f"Errore: {error_detail}\n\n"
+                         f"Ti preghiamo di riprovare o contattare il supporto se il problema persiste.")
+
+            send_email(user_email, email_subject, email_body)
         sys.exit(1)
         
     finally:
