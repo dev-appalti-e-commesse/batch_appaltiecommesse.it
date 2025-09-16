@@ -522,9 +522,14 @@ def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
                 split_filename = f"{base_name}_{i}.pdf"
                 split_key = os.path.join(key_dir, split_filename) if key_dir else split_filename
 
-                # Upload to S3
+                # Upload to S3 with proper content type
                 logger.info(f"Uploading split {i}/{len(png_files)}: {split_filename}")
-                s3_client.upload_file(pdf_path, bucket, split_key)
+                s3_client.upload_file(
+                    pdf_path,
+                    bucket,
+                    split_key,
+                    ExtraArgs={'ContentType': 'application/pdf'}
+                )
 
                 # Generate S3 URL for the uploaded file
                 split_url = f"s3://{bucket}/{split_key}"
