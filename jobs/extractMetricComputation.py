@@ -439,8 +439,8 @@ def verify_document_exists(db_client: MongoClient, doc_type: str, doc_id: str) -
         return False
 
 
-def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
-    """Split PDF by SOMMANO keyword and upload splits to S3"""
+def split_pdf_by_sommano(pdf_path: str, s3_url: str, work_items: List[Dict]) -> Dict[int, Dict]:
+    """Split PDF by SOMMANO keyword and upload splits to S3, returning mapping of work items to files"""
     try:
         import tempfile
         import shutil
@@ -503,12 +503,15 @@ def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
 
             if not png_files:
                 logger.warning("No split files generated")
-                return []
+                return {}
 
             logger.info(f"Generated {len(png_files)} split files")
 
+            # Map each split to corresponding work item (1-based indexing)
+            work_item_files = {}
+            upload_date = datetime.now(timezone.utc)
+
             # Convert PNGs to PDFs and upload to S3
-            uploaded_urls = []
             for i, png_file in enumerate(png_files, 1):
                 png_path = os.path.join(output_dir, png_file)
 
@@ -531,15 +534,21 @@ def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
                     ExtraArgs={'ContentType': 'application/pdf'}
                 )
 
-                # Generate S3 URL for the uploaded file
-                split_url = f"s3://{bucket}/{split_key}"
-                uploaded_urls.append(split_url)
+                # Use same URL format as original
+                split_url = s3_url.replace(original_filename, split_filename)
+
+                # Map to work item (splits are 1-indexed, work items progressiveNumber is 1-indexed)
+                work_item_files[i] = {
+                    'name': split_filename,
+                    'fileUrl': split_url,
+                    'uploadDate': upload_date
+                }
 
                 # Clean up temp PDF
                 os.remove(pdf_path)
 
-            logger.info(f"Successfully uploaded {len(uploaded_urls)} split files to S3")
-            return uploaded_urls
+            logger.info(f"Successfully uploaded {len(work_item_files)} split files to S3")
+            return work_item_files
 
         finally:
             # Clean up temporary directory
@@ -548,7 +557,26 @@ def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
 
     except Exception as e:
         logger.error(f"Error splitting PDF: {str(e)}")
-        return []
+        return {}
+
+
+def update_work_items_with_files(db_client: MongoClient, doc_type: str, doc_id: str,
+                                work_items: List[Dict], work_item_files: Dict[int, Dict]) -> bool:
+    """Update work items with file information"""
+    try:
+        # Add file info to corresponding work items
+        for work_item in work_items:
+            progressive_num = work_item.get('progressiveNumber')
+            if progressive_num and progressive_num in work_item_files:
+                work_item['file'] = work_item_files[progressive_num]
+                logger.info(f"Work item {progressive_num} linked to file: {work_item_files[progressive_num]['name']}")
+
+        # Now update the document with work items that have file info
+        return update_document(db_client, doc_type, doc_id, work_items, calculate_total_amount(work_items))
+
+    except Exception as e:
+        logger.error(f"Error updating work items with files: {str(e)}")
+        return False
 
 
 def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
@@ -779,11 +807,17 @@ def main():
 
         # Split PDF by SOMMANO and upload to S3
         logger.info("Splitting PDF by SOMMANO keyword...")
-        split_urls = split_pdf_by_sommano(temp_file_path, s3_url)
-        if split_urls:
-            logger.info(f"PDF split into {len(split_urls)} files and uploaded to S3")
-            for i, url in enumerate(split_urls, 1):
-                logger.info(f"  Split {i}: {url}")
+        work_item_files = split_pdf_by_sommano(temp_file_path, s3_url, work_items)
+
+        if work_item_files:
+            logger.info(f"PDF split into {len(work_item_files)} files and uploaded to S3")
+
+            # Update work items with file information
+            logger.info("Updating work items with file information...")
+            if update_work_items_with_files(mongo_client, doc_type, doc_id, work_items, work_item_files):
+                logger.info("Work items updated with file information successfully")
+            else:
+                logger.warning("Failed to update work items with file information")
         else:
             logger.warning("PDF splitting failed or no splits generated")
 
