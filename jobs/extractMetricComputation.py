@@ -535,7 +535,7 @@ def split_pdf_by_sommano(pdf_path: str, s3_url: str, work_items: List[Dict]) -> 
                 )
 
                 # Use same URL format as original
-                split_url = s3_url.replace(original_filename, split_filename)
+                split_url = s3_url.replace('.pdf', f'_{i}.pdf')
 
                 # Map to work item (splits are 1-indexed, work items progressiveNumber is 1-indexed)
                 work_item_files[i] = {
