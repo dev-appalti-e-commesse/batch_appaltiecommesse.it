@@ -483,6 +483,59 @@ def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
         return False
 
 
+def run_primus_quality_check(pdf_path: str) -> Optional[Dict]:
+    """Run extract_primus_specialized_quality.py on the PDF"""
+    try:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        quality_script = os.path.join(script_dir, 'extract_primus_specialized_quality.py')
+
+        logger.info(f"Running quality check script: {quality_script}")
+
+        # Modify the quality script to use the provided PDF path
+        with open(quality_script, 'r', encoding='utf-8') as f:
+            script_content = f.read()
+
+        # Replace the hardcoded path with the actual PDF path
+        modified_content = script_content.replace(
+            '"/Users/cto/Documents/enterprise/AIBF/_AIBF_CLIENTI/GEMBAI/computi/PRIMUS/Mun_VII_CIG_7720106103_03_Computo_Metrico_Estimativo - 22 pagine.pdf"',
+            f'"{pdf_path}"'
+        )
+
+        # Create a temporary modified script
+        temp_script = os.path.join(script_dir, 'temp_quality_check.py')
+        with open(temp_script, 'w', encoding='utf-8') as f:
+            f.write(modified_content)
+
+        try:
+            # Run the modified script
+            result = subprocess.run(
+                [sys.executable, temp_script],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes timeout
+                cwd=script_dir
+            )
+
+            if result.returncode == 0:
+                # Parse the JSON output
+                quality_result = json.loads(result.stdout.strip())
+                logger.info(f"Quality check result: {json.dumps(quality_result, indent=2)}")
+                return quality_result
+            else:
+                logger.error(f"Quality check failed with return code {result.returncode}")
+                logger.error(f"stderr: {result.stderr}")
+                return None
+
+        finally:
+            # Clean up temporary script
+            if os.path.exists(temp_script):
+                os.remove(temp_script)
+
+    except Exception as e:
+        logger.error(f"Error running quality check: {str(e)}")
+        return None
+
+
 def main():
     logger.info("Starting MetricComputation service")
 
@@ -536,7 +589,15 @@ def main():
             error_msg = "Failed to download file from S3"
             logger.error(error_msg)
             raise ValueError(error_msg)
-        
+
+        # Run quality check first
+        logger.info("Running PDF quality check...")
+        quality_result = run_primus_quality_check(temp_file_path)
+        if quality_result:
+            print(f"QUALITY CHECK RESULT: {json.dumps(quality_result, indent=2)}")
+        else:
+            logger.warning("Quality check failed, continuing with extraction...")
+
         # Process PDF with Primus extractor
         logger.info("Processing PDF with Primus extractor...")
         extraction_result = process_pdf_with_primus(temp_file_path)
