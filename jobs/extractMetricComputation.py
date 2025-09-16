@@ -439,6 +439,113 @@ def verify_document_exists(db_client: MongoClient, doc_type: str, doc_id: str) -
         return False
 
 
+def split_pdf_by_sommano(pdf_path: str, s3_url: str) -> List[str]:
+    """Split PDF by SOMMANO keyword and upload splits to S3"""
+    try:
+        import tempfile
+        import shutil
+        from pathlib import Path
+
+        # Parse original S3 URL to get bucket and base key
+        parsed = urlparse(s3_url)
+        if parsed.scheme == 's3':
+            bucket = parsed.netloc
+            original_key = parsed.path.lstrip('/')
+        elif 's3.amazonaws.com' in parsed.netloc or 's3' in parsed.netloc:
+            parts = parsed.netloc.split('.')
+            bucket = parts[0]
+            original_key = parsed.path.lstrip('/')
+        else:
+            path_parts = parsed.path.lstrip('/').split('/', 1)
+            if len(path_parts) == 2:
+                bucket = path_parts[0]
+                original_key = path_parts[1]
+            else:
+                raise ValueError(f"Cannot parse S3 URL: {s3_url}")
+
+        # Decode the key
+        original_key = unquote(original_key)
+
+        # Get directory and filename parts
+        key_dir = os.path.dirname(original_key)
+        original_filename = os.path.basename(original_key)
+        base_name, ext = os.path.splitext(original_filename)
+
+        logger.info(f"Splitting PDF: {original_filename}")
+
+        # Create temporary directory for output
+        temp_dir = tempfile.mkdtemp()
+        output_dir = os.path.join(temp_dir, 'splits')
+        os.makedirs(output_dir, exist_ok=True)
+
+        try:
+            # Import the splitting function directly
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            sys.path.insert(0, script_dir)
+            from extract_primus_specialized_split import crop_rows_by_keyword
+
+            # Run the split function
+            crop_rows_by_keyword(
+                pdf_path=Path(pdf_path),
+                out_dir=Path(output_dir),
+                keyword="SOMMANO",
+                dpi=144,
+                left_margin=6.0,
+                right_margin=6.0,
+                extend_top=-4.0,
+                extend_bottom=6.0,
+                include_keyword_padding=8.0,
+                make_zip=False
+            )
+
+            # Get all generated PNG files
+            png_files = sorted([f for f in os.listdir(output_dir) if f.endswith('.png')])
+
+            if not png_files:
+                logger.warning("No split files generated")
+                return []
+
+            logger.info(f"Generated {len(png_files)} split files")
+
+            # Convert PNGs to PDFs and upload to S3
+            uploaded_urls = []
+            for i, png_file in enumerate(png_files, 1):
+                png_path = os.path.join(output_dir, png_file)
+
+                # Convert PNG to PDF using PIL
+                from PIL import Image
+                img = Image.open(png_path)
+                pdf_path = os.path.join(temp_dir, f"temp_{i}.pdf")
+                img.save(pdf_path, "PDF")
+
+                # Generate S3 key for split file
+                split_filename = f"{base_name}_{i}.pdf"
+                split_key = os.path.join(key_dir, split_filename) if key_dir else split_filename
+
+                # Upload to S3
+                logger.info(f"Uploading split {i}/{len(png_files)}: {split_filename}")
+                s3_client.upload_file(pdf_path, bucket, split_key)
+
+                # Generate S3 URL for the uploaded file
+                split_url = f"s3://{bucket}/{split_key}"
+                uploaded_urls.append(split_url)
+
+                # Clean up temp PDF
+                os.remove(pdf_path)
+
+            logger.info(f"Successfully uploaded {len(uploaded_urls)} split files to S3")
+            return uploaded_urls
+
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+
+    except Exception as e:
+        logger.error(f"Error splitting PDF: {str(e)}")
+        return []
+
+
 def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
                    work_items: List[Dict], total_amount: float) -> bool:
     """Update document in MongoDB with workItems and totalAmount"""
@@ -664,7 +771,17 @@ def main():
         if not update_document(mongo_client, doc_type, doc_id, work_items, total_amount):
             # Error details already logged in update_document function
             raise ValueError("Failed to update database")
-        
+
+        # Split PDF by SOMMANO and upload to S3
+        logger.info("Splitting PDF by SOMMANO keyword...")
+        split_urls = split_pdf_by_sommano(temp_file_path, s3_url)
+        if split_urls:
+            logger.info(f"PDF split into {len(split_urls)} files and uploaded to S3")
+            for i, url in enumerate(split_urls, 1):
+                logger.info(f"  Split {i}: {url}")
+        else:
+            logger.warning("PDF splitting failed or no splits generated")
+
         # Success - send success email
         logger.info("Process completed successfully")
 
