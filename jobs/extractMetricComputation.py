@@ -46,9 +46,9 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
         if not SMTP_USER or not SMTP_PASSWORD:
             logger.warning(f"Email credentials not configured, skipping email to {to_email}")
             return False
-            
+
         msg = MIMEMultipart()
-        msg['From'] = EMAIL_FROM
+        msg['From'] = f"Gembai <{EMAIL_FROM}>"
         msg['To'] = to_email
         msg['Subject'] = subject
         
@@ -595,6 +595,40 @@ def main():
         quality_result = run_primus_quality_check(temp_file_path)
         if quality_result:
             print(f"QUALITY CHECK RESULT: {json.dumps(quality_result, indent=2)}")
+
+            # Check quality ratio threshold
+            quality_ratio = quality_result.get('quality_ratio', 0)
+            if quality_ratio < 0.95:
+                # Determine document type labels
+                if doc_type == 'privateTender':
+                    doc_label = "della gara"
+                else:  # metricComputation
+                    doc_label = "del computo metrico"
+
+                error_msg = f"Cannot extract file because low quality (ratio: {quality_ratio})"
+                logger.error(error_msg)
+
+                # Send error email
+                email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
+                email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
+                send_email(user_email, email_subject, email_body)
+
+                # Log final result with failure status
+                result = {
+                    'job_id': job_id,
+                    'job_type': 'MetricComputation',
+                    'status': 'failed',
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'document_id': doc_id,
+                    'document_type': doc_type,
+                    'error': 'low_quality_pdf',
+                    'quality_ratio': quality_ratio,
+                    'message': error_msg
+                }
+                logger.info(f"Job terminated due to low quality PDF: {json.dumps(result, indent=2)}")
+
+                # Exit gracefully with status 0 (successful termination, but job marked as failed)
+                sys.exit(0)
         else:
             logger.warning("Quality check failed, continuing with extraction...")
 
