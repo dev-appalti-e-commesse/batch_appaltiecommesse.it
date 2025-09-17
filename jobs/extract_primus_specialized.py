@@ -131,18 +131,6 @@ class PrimusPDFExtractor:
                 
         return False
     
-    def normalize_text_line(self, line: str) -> str:
-        """Normalize text line for consistent cross-platform parsing"""
-        if not line:
-            return line
-        
-        # Normalize spacing around common separators
-        line = re.sub(r'\s*/\s*', '/', line)  # "1 / 1" -> "1/1"
-        line = re.sub(r'\s*-\s*', '-', line)  # "A - B" -> "A-B"
-        line = re.sub(r'\s+', ' ', line)      # Multiple spaces -> single space
-        line = line.strip()
-        
-        return line
     
     def extract_work_item_chunks(self, pdf_path: str) -> List[str]:
         """Extract work item chunks using proven universal extractor logic"""
@@ -151,95 +139,42 @@ class PrimusPDFExtractor:
         full_document_text = ""
         try:
             with pdfplumber.open(pdf_path) as pdf:
-                logger.info(f"Opened PDF with {len(pdf.pages)} pages")
-                print(f"[EXTRACTION] Starting to process {len(pdf.pages)} pages...", flush=True)
-                for i, page in enumerate(pdf.pages):
-                    try:
-                        print(f"[EXTRACTION] Processing page {i+1}/{len(pdf.pages)}...", flush=True)
-                        page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
-                        if page_text:
-                            # Clean and normalize lines for consistent cross-platform parsing
-                            cleaned_lines = []
-                            for line in page_text.split('\n'):
-                                if not self.is_junk_line(line):
-                                    normalized_line = self.normalize_text_line(line)
-                                    if normalized_line:  # Only add non-empty normalized lines
-                                        cleaned_lines.append(normalized_line)
-                            full_document_text += "\n".join(cleaned_lines) + "\n"
-                            logger.debug(f"Extracted {len(cleaned_lines)} lines from page {i+1}")
-                        else:
-                            logger.warning(f"No text extracted from page {i+1}")
-                    except Exception as e:
-                        logger.error(f"Error extracting text from page {i+1}: {e}")
-                        continue
+                for page in pdf.pages:
+                    page_text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                    if page_text:
+                        cleaned_lines = [line for line in page_text.split('\n') if not self.is_junk_line(line)]
+                        full_document_text += "\n".join(cleaned_lines) + "\n"
 
             # Check if this is a Primus format with TARIFFA/DESIGNAZIONE columns
             tariffa_found = "TARIFFA" in full_document_text
             designazione_found = "DESIGNAZIONE DEI LAVORI" in full_document_text
             logger.info(f"Format detection: TARIFFA={tariffa_found}, DESIGNAZIONE DEI LAVORI={designazione_found}")
-            
-            # DEBUG: Show first 1000 characters of extracted text
-            logger.info(f"DEBUG - First 1000 chars of extracted text: {repr(full_document_text[:1000])}")
-            
-            # CHECKPOINT 1
-            logger.info("CHECKPOINT 1: About to process debug lines")
-            
-            # DEBUG: Show first 20 lines after cleaning
-            lines_sample = full_document_text.split('\n')[:20]
-            logger.info(f"DEBUG - First 20 lines after cleaning ({len(lines_sample)} total):")
-            
-            # CHECKPOINT 2
-            logger.info("CHECKPOINT 2: Starting line iteration")
-            
-            for i, line in enumerate(lines_sample):
-                if line.strip():
-                    logger.info(f"  Line {i:2d}: {repr(line.strip())}")
-                    
-            # CHECKPOINT 3
-            logger.info("CHECKPOINT 3: Finished debug lines, about to check format")
-            
+
             if (tariffa_found and designazione_found):
                 logger.info("Detected Primus format - trying Primus extraction methods")
-                
-                # CHECKPOINT 4
-                logger.info("CHECKPOINT 4: About to call extract_primus_format_chunks")
-                
+
                 # First try the specialized TARIFFA/DESIGNAZIONE method
                 primus_chunks = self.extract_primus_format_chunks(full_document_text)
-                
-                # CHECKPOINT 5
-                logger.info(f"CHECKPOINT 5: extract_primus_format_chunks returned {len(primus_chunks) if primus_chunks else 0} chunks")
-                
-                # Use dynamic threshold based on text length - small PDFs need lower threshold
-                text_length = len(full_document_text)
-                threshold = 5 if text_length < 5000 else 200  # Low threshold for small PDFs
-                logger.info(f"Using threshold {threshold} for text length {text_length}")
-                
-                if primus_chunks and len(primus_chunks) >= threshold:
-                    logger.info(f"Primus method returned {len(primus_chunks)} chunks - ACCEPTED!")
+                if primus_chunks and len(primus_chunks) > 200:  # Higher threshold - need many chunks for large PDFs
+                    logger.info(f"Primus method returned {len(primus_chunks)} chunks")
                     return primus_chunks
                 else:
-                    logger.warning(f"Primus method returned only {len(primus_chunks) if primus_chunks else 0} chunks (threshold: {threshold})")
-                
+                    logger.warning(f"Primus method returned only {len(primus_chunks) if primus_chunks else 0} chunks")
+
                 # Try the fraction format method
                 fraction_chunks = self.extract_fraction_format_chunks(full_document_text)
-                if fraction_chunks and len(fraction_chunks) >= threshold:
-                    logger.info(f"Fraction format method returned {len(fraction_chunks)} chunks - ACCEPTED!")
+                if fraction_chunks and len(fraction_chunks) > 200:  # Higher threshold - need many chunks for large PDFs
+                    logger.info(f"Fraction format method returned {len(fraction_chunks)} chunks")
                     return fraction_chunks
                 else:
-                    logger.warning(f"Fraction method returned only {len(fraction_chunks) if fraction_chunks else 0} chunks (threshold: {threshold})")
-                
+                    logger.warning(f"Fraction method returned only {len(fraction_chunks) if fraction_chunks else 0} chunks")
+
                 logger.warning("Both specialized Primus methods returned insufficient chunks, falling back to universal patterns")
 
-            # DEBUG: Show text characteristics for debugging
-            logger.info(f"DEBUG - Text length: {len(full_document_text)}")
-            logger.info(f"DEBUG - Contains SOMMANO: {'SOMMANO' in full_document_text}")
-            logger.info(f"DEBUG - Newline type: {repr(full_document_text[:200])}")
-            
             # Try multiple patterns to identify work item starts (fallback for other Primus variants)
             patterns_to_try = [
                 # Pattern 1: "1 / 17" format but only split when followed by another fraction pattern
-                r'(?=\n\d+\s*/\s*\d+\s+[A-Za-z])',  # Only split when there's text after the fraction 
+                r'(?=\n\d+\s*/\s*\d+\s+[A-Za-z])',  # Only split when there's text after the fraction
                 # Pattern 2: Just number at start of line BUT exclude 3-digit reference code endings
                 r'(?=\n(?!\d{3}\s)\d+\s+[A-Z])',
                 # Pattern 3: Number followed by tariff code
@@ -347,59 +282,51 @@ class PrimusPDFExtractor:
             if not in_data_section:
                 continue
                 
-            # Debug: show first few lines we're analyzing
-            if line_num <= 20:
-                logger.info(f"🔍 PRIMUS METHOD: Analyzing line {line_num}: {repr(line_stripped)}")
-                
             # Look for MAIN work item starts: number + description or number + reference code
             # Pattern: "1 Nolo di autocarro...", "2 Nolo di piattaforma...", "5 Scavo a sezione..."
             # BUT NOT 3-digit reference code endings like "005", "010", "015"
-            
+
             # First check if this is a 3-digit reference code ending (should NOT start new item)
             is_reference_code_ending = re.match(r'^(\d{3})(\s|$)', line_stripped)
-            
+
             if is_reference_code_ending:
                 # This is a reference code ending like "005", "010", "015"
                 # Add it to the current chunk, don't start a new one
                 if current_chunk:
                     current_chunk.append(line_stripped)
-                
+                    logger.debug(f"Added reference code continuation: {line_stripped}")
+
             else:
                 # Check for actual work item starts - multiple patterns:
                 # 1. Traditional: "1 Nolo di...", "2 Demolizione..."
                 # 2. Fraction format: "1/17", "2/18", "3/19" (extract just the first number)
                 # 3. Special cases: items that start with lowercase
-                
-                # Robust patterns - text is now normalized so "1 / 1" becomes "1/1"
+
                 main_item_match = re.match(r'^([1-9]\d?)\s+([A-Z][a-zA-Z]{3,})', line_stripped)
-                # Match fraction format after normalization: "1/1", "2/2", etc.
                 fraction_match = re.match(r'^([1-9]\d?)/\d+', line_stripped)
                 special_case_match = re.match(r'^(13|37|74)\s+(cemento|metalli|legno)', line_stripped)
-                
+
                 if main_item_match or fraction_match or special_case_match:
-                    logger.info(f"🔍 PRIMUS METHOD: FOUND MATCH! Line: {repr(line_stripped[:100])}")
                     if main_item_match:
                         item_number = int(main_item_match.group(1))
                         descriptive_word = main_item_match.group(2)
-                        valid_item = (item_number <= 100 and 
+                        valid_item = (item_number <= 100 and
                                     not descriptive_word.lower().startswith(('circuit', 'linea', 'sotto')))
-                        logger.info(f"🔍 PRIMUS METHOD: Main item match - number: {item_number}, word: {descriptive_word}")
                     elif fraction_match:
                         item_number = int(fraction_match.group(1))
                         valid_item = True  # Fraction patterns are always valid work items
-                        logger.info(f"🔍 PRIMUS METHOD: Fraction match - number: {item_number}")
+                        logger.debug(f"Found fraction pattern work item: {item_number}")
                     else:  # special_case_match
                         item_number = int(special_case_match.group(1))
                         valid_item = True
-                        logger.info(f"🔍 PRIMUS METHOD: Special case match - number: {item_number}")
-                    
+
                     if valid_item:
                         # If we have a previous chunk, save it
                         if current_chunk:
                             chunk_text = '\n'.join(current_chunk).strip()
                             if len(chunk_text) > 30:  # Don't require SOMMANO - some items might not have it
                                 chunks.append(chunk_text)
-                        
+
                         # Start new chunk with the current line
                         current_chunk = [line_stripped]
                         logger.debug(f"Started new work item {item_number}: {line_stripped[:50]}...")
@@ -543,14 +470,17 @@ class PrimusPDFExtractor:
         * Always return an integer.
         
         2. **referenceCode**
-        * Look for alphanumeric codes like "01.P24.C60.0", "07.A20.T30.015".
+        * Look for the MAIN reference code at the beginning of the text, NOT codes that appear later in descriptions.
+        * Common patterns: "01.P24.C60.0", "07.A20.T30.015", "A02.38.01", "18.08.033*.001", "MM.1.13".
         * Extract codes like "A 3.01.9", "G 1.01.1" from patterns like "1 A 3.01.9".
-        * If you cannot find a clear code, use `null`.
+        * IMPORTANT: Take the FIRST code that appears near the item number, not codes embedded in descriptions.
+        * If you cannot find a clear PRIMARY code, use `null`.
         
         3. **description**
         * Extract text before "SOMMANO" or calculations.
         * Include all relevant details but exclude measurement calculations and price calculations.
         * Preserve the essence of the description but clean up formatting.
+        * IMPORTANT: Never add "..." or ellipsis - keep text as extracted.
         
         4. **quantity**
         * Extract the numeric value that appears after "SOMMANO".
