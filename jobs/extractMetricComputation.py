@@ -145,6 +145,43 @@ def get_param(param_name: str) -> Optional[str]:
         return None
 
 
+def update_extraction_flag(db_client: MongoClient, doc_type: str, doc_id: str, is_extracting: bool) -> bool:
+    """Update extraction flag in MongoDB"""
+    try:
+        db = db_client[DATABASE_NAME]
+
+        # Choose collection and field name based on type
+        if doc_type == 'privateTender':
+            collection = db['private_tenders']
+            flag_field = 'extractingTenderContent'
+        elif doc_type == 'metricComputation':
+            collection = db['metric_computations']
+            flag_field = 'extractingContent'
+        else:
+            logger.error(f"Invalid document type: {doc_type}")
+            return False
+
+        # Update extraction flag
+        result = collection.update_one(
+            {'_id': ObjectId(doc_id)},
+            {'$set': {
+                flag_field: is_extracting,
+                'updatedAt': get_italian_time()
+            }}
+        )
+
+        if result.matched_count == 0:
+            logger.error(f"Document not found: {doc_id}")
+            return False
+        else:
+            logger.info(f"Extraction flag updated: {flag_field}={is_extracting} for {doc_id}")
+            return True
+
+    except Exception as e:
+        logger.error(f"Failed to update extraction flag: {str(e)}")
+        return False
+
+
 def validate_objectid(id_str: str) -> bool:
     """Validate if string is a valid MongoDB ObjectId"""
     if id_str is None or not isinstance(id_str, str):
@@ -771,6 +808,10 @@ def main():
         # Connect to MongoDB
         logger.info("Connecting to MongoDB...")
         mongo_client = MongoClient(MONGO_URI)
+
+        # Set extraction flag to true at start
+        logger.info("Setting extraction flag to true...")
+        update_extraction_flag(mongo_client, doc_type, doc_id, True)
         
         # Verify document exists
         logger.info(f"Verifying document exists: {doc_id} in {doc_type}")
@@ -809,6 +850,9 @@ def main():
                 email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
                 email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
                 send_email(user_email, email_subject, email_body)
+
+                # Set extraction flag to false on low quality error
+                update_extraction_flag(mongo_client, doc_type, doc_id, False)
 
                 # Log final result with failure status
                 result = {
@@ -902,7 +946,11 @@ def main():
                      f"- Importo totale: €{total_amount:,.2f}")
 
         send_email(user_email, email_subject, email_body)
-        
+
+        # Set extraction flag to false on success
+        logger.info("Setting extraction flag to false on success...")
+        update_extraction_flag(mongo_client, doc_type, doc_id, False)
+
         # Log final result
         result = {
             'job_id': job_id,
@@ -963,6 +1011,14 @@ def main():
                          f"Ti preghiamo di riprovare o contattare il supporto se il problema persiste.")
 
             send_email(user_email, email_subject, email_body)
+
+        # Set extraction flag to false on any error if we have the necessary info
+        if 'mongo_client' in locals() and mongo_client and 'doc_type' in locals() and 'doc_id' in locals():
+            try:
+                update_extraction_flag(mongo_client, doc_type, doc_id, False)
+            except Exception as flag_error:
+                logger.error(f"Failed to set extraction flag to false on error: {str(flag_error)}")
+
         sys.exit(1)
         
     finally:
