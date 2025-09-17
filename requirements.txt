@@ -10,6 +10,7 @@ ujson==5.9.0
 
 # Date and time
 python-dateutil==2.8.2
+pytz==2024.1
 
 # Environment variable management
 python-dotenv==1.0.0

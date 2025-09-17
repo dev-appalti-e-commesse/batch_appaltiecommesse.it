@@ -16,6 +16,7 @@ from pymongo import MongoClient
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from utils.italian_time import get_italian_time
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,6 +41,55 @@ SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
 
 
+def format_email_html(body_content: str, to_email: str) -> str:
+    """Format email content with HTML template and Gembai branding"""
+    logo_url = "https://gembai.it/assets/images/logo_Gembai-appalti_e_commesse.png"
+
+    # Convert plain text with newlines to HTML paragraphs
+    html_content = ""
+    for line in body_content.split('\n'):
+        if line.strip():
+            html_content += f"<p>{line}</p>"
+
+    html = f"""<!DOCTYPE html>
+    <html lang="it">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Open+Sans&display=swap');
+            </style>
+        </head>
+        <body>
+            <div style="font-family: 'Open Sans', sans-serif; max-width:600px; margin:0 auto; padding: 20px;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <img src="{logo_url}" alt="Gembai Logo" style="height: 40px;">
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <p>Ciao!</p>
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    {html_content}
+                </div>
+
+                <div style="margin-top: 30px;">
+                    <p>Il Team di Gembai</p>
+                </div>
+
+                <div style="margin-top: 20px;">
+                    <span style="font-size: 12px; color: #666;">
+                        Questa email è stata inviata a {to_email}. Se non hai richiesto tu questa operazione, per favore contattaci immediatamente a info@appaltiecommesse.it
+                    </span>
+                </div>
+            </div>
+        </body>
+    </html>"""
+
+    return html
+
+
 def send_email(to_email: str, subject: str, body: str) -> bool:
     """Send email notification to user"""
     try:
@@ -47,27 +97,32 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
             logger.warning(f"Email credentials not configured, skipping email to {to_email}")
             return False
 
-        msg = MIMEMultipart()
+        msg = MIMEMultipart('alternative')
         msg['From'] = f"Gembai <{EMAIL_FROM}>"
         msg['To'] = to_email
         msg['Subject'] = subject
-        
+
+        # Create HTML version
+        html_body = format_email_html(body, to_email)
+
+        # Attach both plain text and HTML versions
         msg.attach(MIMEText(body, 'plain'))
-        
+        msg.attach(MIMEText(html_body, 'html'))
+
         if SMTP_PORT == 465:
             server = smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT)
         else:
             server = smtplib.SMTP(SMTP_HOST, SMTP_PORT)
             server.starttls()
         server.login(SMTP_USER, SMTP_PASSWORD)
-        
+
         text = msg.as_string()
         server.sendmail(EMAIL_FROM, to_email, text)
         server.quit()
-        
+
         logger.info(f"Email sent successfully to {to_email}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send email: {str(e)}")
         return False
@@ -590,13 +645,15 @@ def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
             collection = db['private_tenders']
             update_fields = {
                 'tenderContent.workItems': work_items,
-                'tenderContent.totalAmount': total_amount
+                'tenderContent.totalAmount': total_amount,
+                'updatedAt': get_italian_time()
             }
         elif doc_type == 'metricComputation':
             collection = db['metric_computations']
             update_fields = {
                 'content.workItems': work_items,
-                'content.totalAmount': total_amount
+                'content.totalAmount': total_amount,
+                'updatedAt': get_italian_time()
             }
         else:
             logger.error(f"Failed to update database - Invalid document type: {doc_type}")
