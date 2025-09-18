@@ -41,7 +41,38 @@ SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
 
 
-def format_email_html(body_content: str, to_email: str) -> str:
+def get_frontend_url(doc_type: str, doc_id: str, project: str) -> Optional[str]:
+    """Generate frontend URL based on API origin and document type"""
+    # Get the origin from the request headers (passed as environment variable)
+    api_origin = get_header('x-api-origin') or ''
+
+    # Determine frontend host based on API origin
+    if 'localhost' in api_origin:
+        frontend_host = 'http://localhost:3000'
+    elif 'api-develop.gembai.it' in api_origin:
+        frontend_host = 'https://dev.gembai.it'
+    elif 'api-staging.gembai.it' in api_origin:
+        frontend_host = 'https://preview.gembai.it'
+    elif 'api-production.gembai.it' in api_origin:
+        frontend_host = 'https://gembai.it'
+    else:
+        # Not allowed origin
+        logger.error(f"Not allowed origin: {api_origin}")
+        raise ValueError(f"Not allowed origin: {api_origin}")
+
+    # Determine path based on document type
+    if doc_type == 'metricComputation':
+        path = 'analisiComputo'
+    elif doc_type == 'privateTender':
+        path = 'creaGare'
+    else:
+        path = 'analisiComputo'  # Default
+
+    # Build the URL
+    return f"{frontend_host}/{path}?idProgetto={project}&cig={doc_id}"
+
+
+def format_email_html(body_content: str, to_email: str, button_href: str = None, button_text: str = None) -> str:
     """Format email content with HTML template and Gembai branding"""
     logo_url = "https://gembai.it/assets/images/logo_Gembai-appalti_e_commesse.png"
 
@@ -50,6 +81,24 @@ def format_email_html(body_content: str, to_email: str) -> str:
     for line in body_content.split('\n'):
         if line.strip():
             html_content += f"<p>{line}</p>"
+
+    # Add button HTML if provided
+    button_html = ""
+    if button_href and button_text:
+        button_html = f"""
+                <div style="margin-top: 30px; text-align: center;">
+                    <a href="{button_href}"
+                       style="background: #3366FF;
+                              color: #ffffff !important;
+                              padding: 0.5rem 1rem;
+                              text-decoration: none;
+                              border-radius: 0.5rem;
+                              font-size: 1.2em;
+                              display: inline-block;
+                              font-weight: 700;">
+                        {button_text}
+                    </a>
+                </div>"""
 
     html = f"""<!DOCTYPE html>
     <html lang="it">
@@ -74,6 +123,8 @@ def format_email_html(body_content: str, to_email: str) -> str:
                     {html_content}
                 </div>
 
+                {button_html}
+
                 <div style="margin-top: 30px;">
                     <p>Il Team di Gembai</p>
                 </div>
@@ -90,7 +141,7 @@ def format_email_html(body_content: str, to_email: str) -> str:
     return html
 
 
-def send_email(to_email: str, subject: str, body: str) -> bool:
+def send_email(to_email: str, subject: str, body: str, button_href: str = None, button_text: str = None) -> bool:
     """Send email notification to user"""
     try:
         if not SMTP_USER or not SMTP_PASSWORD:
@@ -103,7 +154,7 @@ def send_email(to_email: str, subject: str, body: str) -> bool:
         msg['Subject'] = subject
 
         # Create HTML version
-        html_body = format_email_html(body, to_email)
+        html_body = format_email_html(body, to_email, button_href, button_text)
 
         # Attach both plain text and HTML versions
         msg.attach(MIMEText(body, 'plain'))
@@ -504,31 +555,50 @@ def process_pdf_with_primus(pdf_path: str) -> Optional[Dict]:
         return None
 
 
-def verify_document_exists(db_client: MongoClient, doc_type: str, doc_id: str) -> bool:
-    """Verify if document exists in MongoDB"""
+def verify_document_exists(db_client: MongoClient, doc_type: str, doc_id: str) -> Optional[Dict]:
+    """Verify if document exists in MongoDB and retrieve project and file info"""
     try:
         db = db_client[DATABASE_NAME]
-        
-        # Choose collection based on type
+
+        # Choose collection and fields based on type
         if doc_type == 'privateTender':
             collection = db['private_tenders']
+            projection = {
+                'project': 1,
+                'tenderContent.file.name': 1
+            }
         elif doc_type == 'metricComputation':
             collection = db['metric_computations']
+            projection = {
+                'project': 1,
+                'content.file.name': 1
+            }
         else:
             logger.error(f"Invalid document type: {doc_type}")
-            return False
-        
-        # Query with lean() for performance
+            return None
+
+        # Query document with lean projection
         document = collection.find_one(
             {'_id': ObjectId(doc_id)},
-            {'_id': 1}  # Only fetch _id field
+            projection
         )
-        
-        return document is not None
-        
+
+        if document:
+            # Extract file name based on type
+            if doc_type == 'privateTender':
+                file_info = document.get('tenderContent', {}).get('file', {})
+                document['fileName'] = file_info.get('name', 'documento')
+            elif doc_type == 'metricComputation':
+                file_info = document.get('content', {}).get('file', {})
+                document['fileName'] = file_info.get('name', 'documento')
+            else:
+                document['fileName'] = 'documento'
+
+        return document
+
     except Exception as e:
         logger.error(f"Error verifying document: {str(e)}")
-        return False
+        return None
 
 
 def split_pdf_by_sommano(pdf_path: str, s3_url: str, work_items: List[Dict]) -> Dict[int, Dict]:
@@ -788,9 +858,6 @@ def main():
         title = get_param('title')
         doc_type = get_param('type')
 
-        # Extract filename from S3 URL
-        filename = os.path.basename(urlparse(s3_url).path) if s3_url else 'documento'
-        
         logger.info(f"Job ID: {job_id}")
         logger.info(f"Headers: email={user_email}, company={user_company_id}")
         logger.info(f"Params: s3Url={s3_url}, id={doc_id}, title={title}, type={doc_type}")
@@ -813,12 +880,18 @@ def main():
         logger.info("Setting extraction flag to true...")
         update_extraction_flag(mongo_client, doc_type, doc_id, True)
         
-        # Verify document exists
+        # Verify document exists and retrieve project/file info
         logger.info(f"Verifying document exists: {doc_id} in {doc_type}")
-        if not verify_document_exists(mongo_client, doc_type, doc_id):
+        document_info = verify_document_exists(mongo_client, doc_type, doc_id)
+        if not document_info:
             error_msg = f"Document not found: {doc_id} in {doc_type}"
             logger.error(error_msg)
             raise ValueError(error_msg)
+
+        # Extract project ID and filename from document
+        project_id = document_info.get('project', '')
+        filename = document_info.get('fileName', 'documento')
+        logger.info(f"Document info - Project: {project_id}, Filename: {filename}")
         
         # Download file from S3
         logger.info(f"Downloading file from S3: {s3_url}")
@@ -837,19 +910,30 @@ def main():
             # Check quality ratio threshold
             quality_ratio = quality_result.get('quality_ratio', 0)
             if quality_ratio < 0.95:
-                # Determine document type labels
+                # Determine document type labels and button text
                 if doc_type == 'privateTender':
                     doc_label = "della gara"
+                    button_text = "Vai alla gara"
                 else:  # metricComputation
                     doc_label = "del computo metrico"
+                    button_text = "Vai al computo"
 
                 error_msg = f"Cannot extract file because low quality (ratio: {quality_ratio})"
                 logger.error(error_msg)
 
-                # Send error email
-                email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
-                email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
-                send_email(user_email, email_subject, email_body)
+                # Try to generate frontend URL
+                try:
+                    frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+                    # Send error email with button
+                    email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
+                    email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
+                    send_email(user_email, email_subject, email_body, frontend_url, button_text)
+                except ValueError as url_error:
+                    # Send email without button if origin not allowed
+                    logger.warning(f"Could not generate frontend URL: {url_error}")
+                    email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
+                    email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
+                    send_email(user_email, email_subject, email_body)
 
                 # Set extraction flag to false on low quality error
                 update_extraction_flag(mongo_client, doc_type, doc_id, False)
@@ -925,27 +1009,44 @@ def main():
         # Success - send success email
         logger.info("Process completed successfully")
 
-        # Determine document type labels
+        # Determine document type labels and button text
         if doc_type == 'privateTender':
             doc_label = "della gara"
             doc_label_for = "per la gara"
             doc_label_edit = "della gara"
+            button_text = "Vai alla gara"
         else:  # metricComputation
             doc_label = "del computo metrico"
             doc_label_for = "per il computo metrico"
             doc_label_edit = "del computo metrico"
+            button_text = "Vai al computo"
 
-        email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
-        email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
-                     f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
-                     f"siano state estratte correttamente.\n\n"
-                     f"Controlla se il valore totale estratto corrisponde al valore totale nel "
-                     f"file del computo metrico.\n\n"
-                     f"Dettagli estrazione:\n"
-                     f"- Voci estratte: {len(work_items)}\n"
-                     f"- Importo totale: €{total_amount:,.2f}")
-
-        send_email(user_email, email_subject, email_body)
+        # Try to generate frontend URL
+        try:
+            frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+            email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
+            email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
+                         f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
+                         f"siano state estratte correttamente.\n\n"
+                         f"Controlla se il valore totale estratto corrisponde al valore totale nel "
+                         f"file del computo metrico.\n\n"
+                         f"Dettagli estrazione:\n"
+                         f"- Voci estratte: {len(work_items)}\n"
+                         f"- Importo totale: €{total_amount:,.2f}")
+            send_email(user_email, email_subject, email_body, frontend_url, button_text)
+        except ValueError as url_error:
+            # Send email without button if origin not allowed
+            logger.warning(f"Could not generate frontend URL: {url_error}")
+            email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
+            email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
+                         f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
+                         f"siano state estratte correttamente.\n\n"
+                         f"Controlla se il valore totale estratto corrisponde al valore totale nel "
+                         f"file del computo metrico.\n\n"
+                         f"Dettagli estrazione:\n"
+                         f"- Voci estratte: {len(work_items)}\n"
+                         f"- Importo totale: €{total_amount:,.2f}")
+            send_email(user_email, email_subject, email_body)
 
         # Set extraction flag to false on success
         logger.info("Setting extraction flag to false on success...")
@@ -970,21 +1071,29 @@ def main():
         # Log error and send single error email
         logger.error(f"Job failed - Error during processing: {str(e)}")
         if user_email and title and doc_type:
-            # Determine document type labels
+            # Determine document type labels and button text
             if doc_type == 'privateTender':
                 doc_label = "della gara"
                 doc_label_for = "per la gara"
                 doc_label_edit = "della gara"
+                button_text = "Vai alla gara"
             else:  # metricComputation
                 doc_label = "del computo metrico"
                 doc_label_for = "per il computo metrico"
                 doc_label_edit = "del computo metrico"
+                button_text = "Vai al computo"
 
-            # Get filename if available
-            if 's3_url' in locals() and s3_url:
-                filename = os.path.basename(urlparse(s3_url).path)
+            # Get filename and project from document info if available
+            if 'document_info' in locals() and document_info:
+                filename = document_info.get('fileName', 'documento')
+                project_id = document_info.get('project', '')
             else:
-                filename = 'documento'
+                # Fallback to extracting from URL if document info not available
+                if 's3_url' in locals() and s3_url:
+                    filename = unquote(os.path.basename(urlparse(s3_url).path))
+                else:
+                    filename = 'documento'
+                project_id = ''
 
             # Determine specific error details for logging (not for user)
             if "Invalid MongoDB ObjectId" in str(e):
@@ -1010,7 +1119,17 @@ def main():
                          f"Errore: {error_detail}\n\n"
                          f"Ti preghiamo di riprovare o contattare il supporto se il problema persiste.")
 
-            send_email(user_email, email_subject, email_body)
+            # Include button if we have the necessary info
+            if project_id and doc_id:
+                try:
+                    frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+                    send_email(user_email, email_subject, email_body, frontend_url, button_text)
+                except ValueError as url_error:
+                    # Send email without button if origin not allowed
+                    logger.warning(f"Could not generate frontend URL: {url_error}")
+                    send_email(user_email, email_subject, email_body)
+            else:
+                send_email(user_email, email_subject, email_body)
 
         # Set extraction flag to false on any error if we have the necessary info
         if 'mongo_client' in locals() and mongo_client and 'doc_type' in locals() and 'doc_id' in locals():
