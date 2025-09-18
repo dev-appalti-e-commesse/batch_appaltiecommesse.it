@@ -41,30 +41,23 @@ SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
 
 
-def get_frontend_url(doc_type: str, doc_id: str, project: str) -> Optional[str]:
-    """Generate frontend URL based on API origin and document type"""
-    # Get the standard Origin header from the HTTP request
-    origin = get_header('origin') or ''
+def get_frontend_url(doc_type: str, doc_id: str, project: str) -> str:
+    """Generate frontend URL based on API environment and document type"""
+    # Get the x-api-env header (already validated at job start)
+    api_env = get_header('x-api-env') or ''
 
-    logger.info(f"Request Origin: '{origin}'")
-
-    # Determine frontend host based on Origin
-    if not origin:
-        # If no origin header, default to production
-        logger.info("No Origin header found, defaulting to production")
-        frontend_host = 'https://gembai.it'
-    elif 'localhost' in origin:
-        frontend_host = 'http://localhost:3000'
-    elif origin == 'https://dev.gembai.it':
+    # Determine frontend host based on API environment
+    if api_env == 'dev':
         frontend_host = 'https://dev.gembai.it'
-    elif origin == 'https://preview.gembai.it':
+    elif api_env == 'staging':
         frontend_host = 'https://preview.gembai.it'
-    elif origin == 'https://gembai.it':
+    elif api_env == 'prod':
         frontend_host = 'https://gembai.it'
+    elif api_env == 'local':
+        frontend_host = 'http://localhost:3000'
     else:
-        # Not allowed origin
-        logger.error(f"Not allowed origin: {origin}")
-        raise ValueError(f"Not allowed origin: {origin}")
+        # This should not happen as validation is done at job start
+        frontend_host = 'https://gembai.it'
 
     # Determine path based on document type
     if doc_type == 'metricComputation':
@@ -867,7 +860,18 @@ def main():
         logger.info(f"Job ID: {job_id}")
         logger.info(f"Headers: email={user_email}, company={user_company_id}")
         logger.info(f"Params: s3Url={s3_url}, id={doc_id}, title={title}, type={doc_type}")
-        
+
+        # Validate x-api-env header first
+        api_env = get_header('x-api-env') or ''
+        logger.info(f"API Environment: '{api_env}'")
+
+        if not api_env:
+            logger.error("Missing required x-api-env header")
+            raise ValueError("Missing required x-api-env header")
+        elif api_env not in ['dev', 'staging', 'prod', 'local']:
+            logger.error(f"Not allowed environment: {api_env}")
+            raise ValueError(f"Not allowed environment: {api_env}")
+
         # Validate required parameters
         if not all([user_email, s3_url, doc_id, title, doc_type]):
             raise ValueError("Missing required parameters")
@@ -927,19 +931,13 @@ def main():
                 error_msg = f"Cannot extract file because low quality (ratio: {quality_ratio})"
                 logger.error(error_msg)
 
-                # Try to generate frontend URL
-                try:
-                    frontend_url = get_frontend_url(doc_type, doc_id, project_id)
-                    # Send error email with button
-                    email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
-                    email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
-                    send_email(user_email, email_subject, email_body, frontend_url, button_text)
-                except ValueError as url_error:
-                    # Send email without button if origin not allowed
-                    logger.warning(f"Could not generate frontend URL: {url_error}")
-                    email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
-                    email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
-                    send_email(user_email, email_subject, email_body)
+                # Generate frontend URL
+                frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+
+                # Send error email with button
+                email_subject = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title}"
+                email_body = f"Impossibile digitalizzare computo metrico da file {filename} {doc_label} {title} a causa della bassa qualità del file. Riprovare con un altro file"
+                send_email(user_email, email_subject, email_body, frontend_url, button_text)
 
                 # Set extraction flag to false on low quality error
                 update_extraction_flag(mongo_client, doc_type, doc_id, False)
@@ -1027,32 +1025,20 @@ def main():
             doc_label_edit = "del computo metrico"
             button_text = "Vai al computo"
 
-        # Try to generate frontend URL
-        try:
-            frontend_url = get_frontend_url(doc_type, doc_id, project_id)
-            email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
-            email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
-                         f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
-                         f"siano state estratte correttamente.\n\n"
-                         f"Controlla se il valore totale estratto corrisponde al valore totale nel "
-                         f"file del computo metrico.\n\n"
-                         f"Dettagli estrazione:\n"
-                         f"- Voci estratte: {len(work_items)}\n"
-                         f"- Importo totale: €{total_amount:,.2f}")
-            send_email(user_email, email_subject, email_body, frontend_url, button_text)
-        except ValueError as url_error:
-            # Send email without button if origin not allowed
-            logger.warning(f"Could not generate frontend URL: {url_error}")
-            email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
-            email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
-                         f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
-                         f"siano state estratte correttamente.\n\n"
-                         f"Controlla se il valore totale estratto corrisponde al valore totale nel "
-                         f"file del computo metrico.\n\n"
-                         f"Dettagli estrazione:\n"
-                         f"- Voci estratte: {len(work_items)}\n"
-                         f"- Importo totale: €{total_amount:,.2f}")
-            send_email(user_email, email_subject, email_body)
+        # Generate frontend URL
+        frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+
+        email_subject = f"Risultato estrazione file {filename} {doc_label} {title} su gembai.it"
+        email_body = (f"Abbiamo finito l'estrazione del computo metrico {doc_label_for} {title}\n\n"
+                     f"Vai alla modifica {doc_label_edit} per controllare che tutte le lavorazioni "
+                     f"siano state estratte correttamente.\n\n"
+                     f"Controlla se il valore totale estratto corrisponde al valore totale nel "
+                     f"file del computo metrico.\n\n"
+                     f"Dettagli estrazione:\n"
+                     f"- Voci estratte: {len(work_items)}\n"
+                     f"- Importo totale: €{total_amount:,.2f}")
+
+        send_email(user_email, email_subject, email_body, frontend_url, button_text)
 
         # Set extraction flag to false on success
         logger.info("Setting extraction flag to false on success...")
@@ -1076,6 +1062,12 @@ def main():
     except Exception as e:
         # Log error and send single error email
         logger.error(f"Job failed - Error during processing: {str(e)}")
+
+        # If error is due to not allowed environment or missing header, just log and exit without sending email
+        if "Not allowed environment" in str(e) or "Missing required x-api-env header" in str(e):
+            logger.error(f"Process terminated due to {str(e)} - no email sent")
+            sys.exit(1)
+
         if user_email and title and doc_type:
             # Determine document type labels and button text
             if doc_type == 'privateTender':
@@ -1127,13 +1119,9 @@ def main():
 
             # Include button if we have the necessary info
             if project_id and doc_id:
-                try:
-                    frontend_url = get_frontend_url(doc_type, doc_id, project_id)
-                    send_email(user_email, email_subject, email_body, frontend_url, button_text)
-                except ValueError as url_error:
-                    # Send email without button if origin not allowed
-                    logger.warning(f"Could not generate frontend URL: {url_error}")
-                    send_email(user_email, email_subject, email_body)
+                # Generate frontend URL
+                frontend_url = get_frontend_url(doc_type, doc_id, project_id)
+                send_email(user_email, email_subject, email_body, frontend_url, button_text)
             else:
                 send_email(user_email, email_subject, email_body)
 
