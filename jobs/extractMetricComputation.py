@@ -43,22 +43,28 @@ EMAIL_FROM = os.environ.get('EMAIL_FROM', SMTP_USER)
 
 def get_frontend_url(doc_type: str, doc_id: str, project: str) -> Optional[str]:
     """Generate frontend URL based on API origin and document type"""
-    # Get the origin from the request headers (passed as environment variable)
-    api_origin = get_header('x-api-origin') or ''
+    # Get the standard Origin header from the HTTP request
+    origin = get_header('origin') or ''
 
-    # Determine frontend host based on API origin
-    if 'localhost' in api_origin:
+    logger.info(f"Request Origin: '{origin}'")
+
+    # Determine frontend host based on Origin
+    if not origin:
+        # If no origin header, default to production
+        logger.info("No Origin header found, defaulting to production")
+        frontend_host = 'https://gembai.it'
+    elif 'localhost' in origin:
         frontend_host = 'http://localhost:3000'
-    elif 'api-develop.gembai.it' in api_origin:
+    elif origin == 'https://dev.gembai.it':
         frontend_host = 'https://dev.gembai.it'
-    elif 'api-staging.gembai.it' in api_origin:
+    elif origin == 'https://preview.gembai.it':
         frontend_host = 'https://preview.gembai.it'
-    elif 'api-production.gembai.it' in api_origin:
+    elif origin == 'https://gembai.it':
         frontend_host = 'https://gembai.it'
     else:
         # Not allowed origin
-        logger.error(f"Not allowed origin: {api_origin}")
-        raise ValueError(f"Not allowed origin: {api_origin}")
+        logger.error(f"Not allowed origin: {origin}")
+        raise ValueError(f"Not allowed origin: {origin}")
 
     # Determine path based on document type
     if doc_type == 'metricComputation':
