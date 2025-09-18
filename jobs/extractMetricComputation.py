@@ -746,6 +746,11 @@ def update_document(db_client: MongoClient, doc_type: str, doc_id: str,
     try:
         db = db_client[DATABASE_NAME]
 
+        # Add _id to each work item if not present (PyMongo doesn't respect Mongoose schema settings)
+        for work_item in work_items:
+            if '_id' not in work_item:
+                work_item['_id'] = ObjectId()
+
         # Choose collection and field names based on type
         if doc_type == 'privateTender':
             collection = db['private_tenders']
